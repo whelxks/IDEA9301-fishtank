@@ -3,7 +3,8 @@
     "**/*",
     "**/.server/**/*",
     "**/.client/**/*",
-    ".react-router/types/**/*"
+    ".react-router/types/**/*",
+    "node_modules/@types/p5/global.d.ts"
   ],
   "compilerOptions": {
     "lib": ["DOM", "DOM.Iterable", "ES2022"],
@@ -17,6 +18,7 @@
       "~/*": ["./app/*"]
     },
     "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
     "resolveJsonModule": true,
