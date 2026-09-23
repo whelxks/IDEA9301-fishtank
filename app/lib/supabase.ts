@@ -16,7 +16,7 @@ export type FishRow = {
 // fish already in the DB when the tank first loads
 export async function getExistingFish(): Promise<FishRow[]> {
   const { data, error } = await supabase
-    .from("fish_uploads")
+    .from("fish")
     .select("*")
     .order("created_at", { ascending: true });
   if (error) {
@@ -29,10 +29,10 @@ export async function getExistingFish(): Promise<FishRow[]> {
 // fires `onInsert` every time a new row lands, after this is called
 export function subscribeToNewFish(onInsert: (row: FishRow) => void) {
   const channel = supabase
-    .channel("fish_uploads_changes")
+    .channel("fish_changes")
     .on(
       "postgres_changes",
-      { event: "INSERT", schema: "public", table: "fish_uploads" },
+      { event: "INSERT", schema: "public", table: "fish" },
       (payload) => onInsert(payload.new as FishRow)
     )
     .subscribe();
@@ -46,7 +46,7 @@ export async function addNewFish(
   outline: string | null = null
 ): Promise<FishRow | null> {
   const { data, error } = await supabase
-    .from("fish_uploads")
+    .from("fish")
     .insert({ image_url: imageUrl, outline })
     .select()
     .single();
