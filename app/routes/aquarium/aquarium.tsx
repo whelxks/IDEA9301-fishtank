@@ -15,17 +15,28 @@ export default function Aquarium() {
     // it's only ever loaded in the browser, after mount
     (async () => {
       const p5 = (await import("p5")).default;
-      const { sketch } = await import("../../p5/aquarium") as any;
+      const { sketch } = (await import("../../p5/aquarium")) as any;
       if (cancelled || !containerRef.current) return;
       instance = new p5(sketch, containerRef.current);
     })();
 
-     return () => {
-    cancelled = true;
-    instance?.customCleanup?.();
-    instance?.remove();
-  };
+    return () => {
+      cancelled = true;
+      instance?.customCleanup?.();
+      instance?.remove();
+    };
   }, []);
 
-  return <div ref={containerRef} style={{ width: "100vw", height: "100vh" }} />;
+  return (
+    <div
+      ref={containerRef}
+      style={{
+        width: "100%",
+        height: "100%",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+      }}
+    />
+  );
 }

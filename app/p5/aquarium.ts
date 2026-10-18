@@ -4,6 +4,7 @@ import type p5 from "p5";
 import {
   getExistingFish,
   subscribeToNewFish,
+  supabase,
   type FishRow,
 } from "../lib/supabase";
 
@@ -66,6 +67,8 @@ let skyImg: p5.Graphics;
 let sandImg: p5.Graphics;
 let t = 0;
 
+let runId = 0;
+
 /* ------------------------------- TYPES ---------------------------------- */
 type FishSprite = p5.Image | p5.Graphics;
 
@@ -120,6 +123,34 @@ interface Rock {
   c: number;
 }
 
+/* ------------------------- STATE RESET ---------------------------- */
+/** Module state survives unmount (ES modules are cached), so wipe it. */
+function resetState(): void {
+  fishes.length = 0;
+  kelps.length = 0;
+  bubbles.length = 0;
+  rocks.length = 0;
+  FISH_FILES.length = 0;
+  loadedFishImgs = [];
+  fallbackFishImgs = [];
+  seenFishIds.clear();
+  pendingFishRows.length = 0;
+  tankReady = false;
+  frontView = false;
+  frontZoom = 1;
+  dragging = false;
+  idleTime = 99;
+  t = 0;
+  camTheta = 0.7;
+  camPhi = 0.16;
+  camRadius = 1080;
+}
+
+export function customCleanup(): void {
+  runId++; // invalidates any in-flight fetch / image load
+  teardownRealtime();
+}
+
 /* ------------------------- FISH LOADING / SPAWN ------------------------- */
 
 function loadFishImages(
@@ -145,7 +176,7 @@ function loadFishImages(
     loadImage(
       file,
       (img) => {
-        console.log("loaded", file, img.width, img.height);
+        // console.log("loaded", file, img.width, img.height);
         results[i] = img;
         finish();
       },
@@ -197,6 +228,9 @@ function makeFish(img: FishSprite): Fish {
 
 /* ------------------------------- SETUP ---------------------------------- */
 function setup(): void {
+  resetState();
+  runId++;
+
   createCanvas(windowWidth, windowHeight, WEBGL);
   perspective(PI / 3, width / height, 10, 7000);
   strokeCap(ROUND);
@@ -289,14 +323,20 @@ let tankReady = false;
 let fishChannel: ReturnType<typeof subscribeToNewFish> | null = null;
 
 function initFishFromSupabase(): void {
+  // A previous mount may have left a live channel. If we don't drop it,
+  // supabase.channel("fish_changes") hands back the cached, already-
+  // subscribed channel and the next .on() throws.
+  teardownRealtime();
+
   // Subscribe FIRST so a row inserted while the initial fetch is in flight
   // isn't lost. Anything that lands early is buffered in pendingFishRows.
-  subscribeToRealtimeFish();
-  void loadExistingFish();
+  const run = runId;
+  subscribeToRealtimeFish(run);
+  void loadExistingFish(run);
 }
 
 /** setup() task: pull every existing row and use its image_url as FISH_FILES. */
-async function loadExistingFish(): Promise<void> {
+async function loadExistingFish(run: number): Promise<void> {
   let rows: FishRow[] = [];
 
   try {
@@ -304,6 +344,8 @@ async function loadExistingFish(): Promise<void> {
   } catch (err) {
     console.warn("[aquarium] getExistingFish failed:", err);
   }
+
+  if (run !== runId) return;
 
   // Update the FISH_FILES list in place (it stays `const`).
   FISH_FILES.length = 0;
@@ -315,16 +357,20 @@ async function loadExistingFish(): Promise<void> {
 
   // Load every URL, then spawn the school once (never again).
   loadFishImages(FISH_FILES, (imgs) => {
+    if (run !== runId) return;
     loadedFishImgs = imgs;
     buildFishes();
     tankReady = true;
-    flushPendingFishRows();
+    flushPendingFishRows(run);
   });
 }
 
-function subscribeToRealtimeFish(): void {
+function subscribeToRealtimeFish(run: number): void {
   try {
-    fishChannel = subscribeToNewFish((row: FishRow) => handleNewFishRow(row));
+    fishChannel = subscribeToNewFish((row: FishRow) => {
+      if (run !== runId) return;
+      handleNewFishRow(row);
+    });
   } catch (err) {
     console.warn("[aquarium] subscribeToNewFish failed:", err);
   }
@@ -344,15 +390,15 @@ function handleNewFishRow(row: FishRow): void {
   spawnFishFromRow(row);
 }
 
-function flushPendingFishRows(): void {
+function flushPendingFishRows(run: number): void {
   while (pendingFishRows.length > 0) {
     const row = pendingFishRows.shift();
-    if (row) spawnFishFromRow(row);
+    if (row) spawnFishFromRow(row, run);
   }
 }
 
 /** Load the new fish's image and add it — the tank is never rebuilt. */
-function spawnFishFromRow(row: FishRow): void {
+function spawnFishFromRow(row: FishRow, run: number = runId): void {
   const url = row.image_url;
 
   if (!url) {
@@ -363,10 +409,12 @@ function spawnFishFromRow(row: FishRow): void {
   loadImage(
     url,
     (img) => {
+      if (run !== runId) return;
       loadedFishImgs.push(img);
       addFishToTank(makeFish(img));
     },
     () => {
+      if (run !== runId) return;
       console.warn("[aquarium] new fish image failed to load:", url);
       addFishToTank(makeFish(randomFallbackSprite()));
     },
@@ -411,14 +459,13 @@ function enterFromEdge(f: Fish): void {
 
 /** Close the realtime channel (page unload / HMR). */
 function teardownRealtime(): void {
-  const ch: unknown = fishChannel;
-  if (typeof ch === "function") {
-    (ch as () => void)();
-  } else if (
-    ch &&
-    typeof (ch as { unsubscribe?: unknown }).unsubscribe === "function"
-  ) {
-    (ch as { unsubscribe: () => void }).unsubscribe();
+  if (!fishChannel) return;
+  try {
+    // removeChannel unsubscribes AND frees the name on the client,
+    // so the next supabase.channel("fish_changes") returns a fresh channel.
+    void supabase.removeChannel(fishChannel);
+  } catch (err) {
+    console.warn("[aquarium] removeChannel failed:", err);
   }
   fishChannel = null;
 }

@@ -1,5 +1,5 @@
 // app/lib/supabase.ts
-import { createClient } from "@supabase/supabase-js";
+import { createClient, RealtimeChannel } from "@supabase/supabase-js";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -25,6 +25,7 @@ export async function getExistingFish(): Promise<FishRow[]> {
   }
   return data ?? [];
 }
+
 
 // fires `onInsert` every time a new row lands, after this is called
 export function subscribeToNewFish(onInsert: (row: FishRow) => void) {
