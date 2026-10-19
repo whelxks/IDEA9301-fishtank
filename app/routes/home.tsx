@@ -2,6 +2,7 @@ import type { Route } from "./+types/home";
 import React, { useCallback, useRef, useState } from "react";
 import Aquarium from "./aquarium/aquarium";
 import { PaneLabel } from "~/components/text";
+import EndangeredAquarium from "./endangered-aquarium/endangered-aquarium";
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -82,23 +83,30 @@ export default function Home() {
         height: "100vh",
         overflow: "hidden",
         background: "#141414",
-        userSelect: "none",
       }}
     >
       {/* ---- LEFT pane ---- */}
       {leftFrac > MIN_FRAC && (
-        <div
-          style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            width: `${pct}%`,
-            height: "100%",
-            overflow: "hidden", // clips the child component
-          }}
-        >
-          <LeftScreen />
-        </div>
+        <>
+          <div
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              width: `${pct}%`,
+              height: "100%",
+              overflow: "hidden", // clips the child component
+            }}
+          >
+            {/* <EndangeredAquarium /> */}
+          </div>
+          <PaneLabel
+            text="fishes in the past year"
+            left="0%"
+            width={`${pct}%`}
+            color="#ffffff"
+          />
+        </>
       )}
 
       {/* ---- RIGHT pane ---- */}
@@ -112,13 +120,14 @@ export default function Home() {
               width: `${100 - pct}%`,
               height: "100%",
               overflow: "hidden",
+              userSelect: "none",
             }}
           >
             <Aquarium />
           </div>
-          
+
           <PaneLabel
-            text="what you want to see in 5 years"
+            text="fishes you want to see in 5 years"
             left={`${pct}%`}
             width={`${100 - pct}%`}
             color="#7fd4ff"
@@ -201,57 +210,3 @@ export default function Home() {
     </div>
   );
 }
-
-const LeftScreen: React.FC = React.memo(() => (
-  <div
-    style={{
-      width: "100%",
-      height: "100%",
-      background: "#2d141e",
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      justifyContent: "center",
-      color: "#fff",
-      fontFamily: "sans-serif",
-      gap: 20,
-    }}
-  >
-    <div
-      style={{
-        width: 120,
-        height: 120,
-        borderRadius: "50%",
-        background: "#e6506e",
-      }}
-    />
-    <div style={{ fontSize: 22 }}>SCREEN A</div>
-  </div>
-));
-
-const RightScreen: React.FC = React.memo(() => (
-  <div
-    style={{
-      width: "100%",
-      height: "100%",
-      background: "#141e32",
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      justifyContent: "center",
-      color: "#fff",
-      fontFamily: "sans-serif",
-      gap: 20,
-    }}
-  >
-    <div
-      style={{
-        width: 120,
-        height: 120,
-        borderRadius: 4,
-        background: "#5aaae6",
-      }}
-    />
-    <div style={{ fontSize: 22 }}>SCREEN B</div>
-  </div>
-));

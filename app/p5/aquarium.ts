@@ -8,6 +8,30 @@ import {
   type FishRow,
 } from "../lib/supabase";
 
+// Import shared utilities
+import {
+  type Fish,
+  type FishSprite,
+  type Kelp,
+  type Bubble,
+  type Rock,
+  type CameraState,
+  updateCamera,
+  loadFishImages,
+  enterFromEdge,
+  drawFloor,
+  drawCaustics,
+  drawRocks,
+  drawGlass,
+  drawKelp,
+  drawFish,
+  drawAllBubbles,
+  makeFishSprite,
+  makeBubbleSprite,
+  makeSkyTexture,
+  makeSandTexture,
+} from "./common-functions";
+
 /* =========================================================================
    3D AQUARIUM — p5.js (WEBGL) — TypeScript
    -------------------------------------------------------------------------
@@ -33,18 +57,17 @@ const FISH_FILES: string[] = [];
 const MIN_FISH = 9; // minimum school size when PNGs are present
 const NO_IMG_FISH = 9; // school size when no PNG loads at all
 
-let camTheta = 0.7;
-let camPhi = 0.16;
-let camRadius = 1080;
-let camX = 0,
-  camY = 0,
-  camZ = 0;
-let camRight: p5.Vector;
-
-let dragging = false;
-let lastMX = 0;
-let lastMY = 0;
-let idleTime = 99;
+let camState: CameraState = {
+  theta: 0.7,
+  phi: 0.16,
+  radius: 1080,
+  x: 0,
+  y: 0,
+  z: 0,
+  right: null as unknown as p5.Vector, // initialized in setup() once p5 boots
+  dragging: false,
+  idleTime: 99,
+};
 
 /* front-view state */
 let frontView = false;
@@ -70,58 +93,7 @@ let t = 0;
 let runId = 0;
 
 /* ------------------------------- TYPES ---------------------------------- */
-type FishSprite = p5.Image | p5.Graphics;
-
-interface Fish {
-  img: FishSprite;
-  size: number;
-  pos: p5.Vector;
-  vel: p5.Vector;
-  speed: number;
-  phase: number;
-  fin: number;
-  bob: number;
-  baseY: number;
-}
-
-interface KelpPoint {
-  x: number;
-  y: number;
-  z: number;
-  w: number;
-}
-
-interface Kelp {
-  x: number;
-  z: number;
-  segs: number;
-  segLen: number;
-  width0: number;
-  phase: number;
-  speed: number;
-  sway: number;
-  dir: number;
-  colA: p5.Color;
-  colB: p5.Color;
-  tip: KelpPoint | null;
-}
-
-interface Bubble {
-  pos: p5.Vector;
-  size: number;
-  speed: number;
-  phase: number;
-  wob: number;
-  life: number;
-}
-
-interface Rock {
-  x: number;
-  z: number;
-  s: number;
-  r: number;
-  c: number;
-}
+// Types (Fish, Kelp, Bubble, Rock) are now imported from `aquarium-common`
 
 /* ------------------------- STATE RESET ---------------------------- */
 /** Module state survives unmount (ES modules are cached), so wipe it. */
@@ -138,12 +110,14 @@ function resetState(): void {
   tankReady = false;
   frontView = false;
   frontZoom = 1;
-  dragging = false;
-  idleTime = 99;
   t = 0;
-  camTheta = 0.7;
-  camPhi = 0.16;
-  camRadius = 1080;
+
+  // Reset camera state
+  camState.theta = 0.7;
+  camState.phi = 0.16;
+  camState.radius = 1080;
+  camState.dragging = false;
+  camState.idleTime = 99;
 }
 
 export function customCleanup(): void {
@@ -153,40 +127,7 @@ export function customCleanup(): void {
 
 /* ------------------------- FISH LOADING / SPAWN ------------------------- */
 
-function loadFishImages(
-  files: string[],
-  onDone: (imgs: p5.Image[]) => void,
-): void {
-  if (!files || files.length === 0) {
-    onDone([]);
-    return;
-  }
-
-  const results: Array<p5.Image | null> = new Array(files.length).fill(null);
-  let remaining = files.length;
-
-  const finish = (): void => {
-    remaining -= 1;
-    if (remaining === 0) {
-      onDone(results.filter((img): img is p5.Image => img !== null));
-    }
-  };
-
-  files.forEach((file, i) => {
-    loadImage(
-      file,
-      (img) => {
-        // console.log("loaded", file, img.width, img.height);
-        results[i] = img;
-        finish();
-      },
-      () => {
-        console.warn("failed to load", file);
-        finish();
-      },
-    );
-  });
-}
+// `loadFishImages` is imported from `aquarium-common`
 
 function buildFishes(): void {
   fishes.length = 0;
@@ -234,6 +175,8 @@ function setup(): void {
   createCanvas(windowWidth, windowHeight, WEBGL);
   perspective(PI / 3, width / height, 10, 7000);
   strokeCap(ROUND);
+
+  camState.right = createVector(1, 0, 0);
 
   // --- Procedural textures ------------------------------------------------
   bubbleImg = makeBubbleSprite();
@@ -293,7 +236,7 @@ function setup(): void {
     });
   }
 
-  camRight = createVector(1, 0, 0);
+  camState.right = createVector(1, 0, 0);
 
   // --- View toggle button --------------------------------------------------
   viewBtn = createButton("FRONT VIEW");
@@ -426,36 +369,11 @@ function randomFallbackSprite(): FishSprite {
 }
 
 function addFishToTank(f: Fish): void {
-  enterFromEdge(f);
+  enterFromEdge(f, TANK.w, TANK.d);
   fishes.push(f);
 }
 
-/** Spawn just outside the glass so the newcomer visibly swims in. */
-function enterFromEdge(f: Fish): void {
-  const hw = TANK.w * 0.45;
-  const hd = TANK.d * 0.45;
-
-  switch (Math.floor(random(4))) {
-    case 0:
-      f.pos.set(-hw, random(-120, 110), random(-hd, hd));
-      break;
-    case 1:
-      f.pos.set(hw, random(-120, 110), random(-hd, hd));
-      break;
-    case 2:
-      f.pos.set(random(-hw, hw), random(-120, 110), -hd);
-      break;
-    default:
-      f.pos.set(random(-hw, hw), random(-120, 110), hd);
-      break;
-  }
-
-  f.baseY = f.pos.y;
-
-  const dir = createVector(-f.pos.x, 0, -f.pos.z);
-  if (dir.magSq() < 1e-4) dir.set(1, 0, 0);
-  f.vel = dir.normalize().mult(f.speed);
-}
+// `enterFromEdge` is imported from `aquarium-common`
 
 /** Close the realtime channel (page unload / HMR). */
 function teardownRealtime(): void {
@@ -474,21 +392,21 @@ function teardownRealtime(): void {
 function toggleView(): void {
   frontView = !frontView;
   if (frontView) {
-    savedTheta = camTheta;
-    savedPhi = camPhi;
-    savedRadius = camRadius;
+    savedTheta = camState.theta;
+    savedPhi = camState.phi;
+    savedRadius = camState.radius;
 
-    camTheta = 0;
-    camPhi = 0;
-    camRadius = 1200; // sits inside the water dome
+    camState.theta = 0;
+    camState.phi = 0;
+    camState.radius = 1200; // sits inside the water dome
     viewBtn.html("ORBIT VIEW");
   } else {
-    camTheta = savedTheta;
-    camPhi = savedPhi;
-    camRadius = savedRadius;
+    camState.theta = savedTheta;
+    camState.phi = savedPhi;
+    camState.radius = savedRadius;
     viewBtn.html("FRONT VIEW");
   }
-  dragging = false;
+  camState.dragging = false;
 }
 
 /* -------------------------------- DRAW ---------------------------------- */
@@ -497,7 +415,7 @@ function draw(): void {
   const dt = Math.min(deltaTime, 50) * 0.001;
   t += dt;
 
-  updateCamera();
+  updateCamera(camState, frontView, frontZoom, TANK.w, TANK.d);
 
   // Water dome
   push();
@@ -507,103 +425,37 @@ function draw(): void {
   pop();
 
   // Scene
-  drawFloor();
-  drawCaustics();
-  drawRocks();
+  drawFloor(TANK.w, TANK.d, TANK.floorY, sandImg);
+  drawCaustics(t, TANK.w, TANK.d, TANK.floorY);
+  drawRocks(rocks, TANK.floorY);
   drawAllKelp();
   drawAllFish();
-  drawAllBubbles(dt);
-  drawGlass();
+  drawAllBubbles(
+    bubbles,
+    bubbleImg,
+    camState,
+    t,
+    dt,
+    TANK.w,
+    TANK.d,
+    TANK.floorY,
+    TANK.topY,
+  );
+  drawGlass(TANK.w, TANK.h, TANK.d);
 }
 
 /* ------------------------------ CAMERA ---------------------------------- */
-function updateCamera(): void {
-  // --- Projection --------------------------------------------------------
-  if (frontView) {
-    // Orthographic: flat 2D-like look. frontZoom controls visible height.
-    const vh = 700 / frontZoom;
-    const vw = vh * (width / height);
-    ortho(-vw / 2, vw / 2, -vh / 2, vh / 2, 10, 7000);
-  } else {
-    perspective(PI / 3, width / height, 10, 7000);
-  }
-
-  // --- Auto orbit (only in 3D mode) --------------------------------------
-  if (!dragging && !frontView) {
-    idleTime += Math.min(deltaTime, 50) * 0.001;
-    if (idleTime > 3) camTheta += 0.0016;
-  }
-
-  // --- Position camera ---------------------------------------------------
-  const cr = camRadius * Math.cos(camPhi);
-  camX = cr * Math.sin(camTheta);
-  camY = -camRadius * Math.sin(camPhi);
-  camZ = cr * Math.cos(camTheta);
-
-  camera(camX, camY, camZ, 0, 0, 0, 0, 1, 0);
-
-  // --- Screen-right vector (for kelp ribbon orientation) -----------------
-  const fx = -camX,
-    fy = -camY,
-    fz = -camZ;
-  const fl = Math.sqrt(fx * fx + fy * fy + fz * fz) || 1;
-  const ux = fx / fl,
-    uz = fz / fl;
-  camRight = createVector(-uz, 0, ux).normalize();
-}
+// `updateCamera` is imported from `aquarium-common`
 
 /* ------------------------------- FLOOR ---------------------------------- */
-function drawFloor(): void {
-  push();
-  translate(0, TANK.floorY + 24, 0);
-  noStroke();
-  fill(88, 70, 50);
-  box(TANK.w, 48, TANK.d);
-  pop();
-
-  push();
-  translate(0, TANK.floorY - 0.5, 0);
-  rotateX(HALF_PI);
-  noStroke();
-  texture(sandImg);
-  plane(TANK.w, TANK.d);
-  pop();
-}
-
-function drawCaustics(): void {
-  push();
-  translate(0, TANK.floorY - 1.4, 0);
-  rotateX(HALF_PI);
-  noStroke();
-  blendMode(ADD);
-  for (let i = 0; i < 8; i++) {
-    const ph = t * 0.25 + i * 1.7;
-    const x = Math.sin(ph * 0.7 + i) * TANK.w * 0.32;
-    const y = Math.cos(ph * 0.53 + i * 2.1) * TANK.d * 0.32;
-    const s = 140 + 70 * Math.sin(ph * 1.3 + i);
-    fill(70, 140, 150, 18);
-    ellipse(x, y, s * 1.7, s);
-  }
-  blendMode(BLEND);
-  pop();
-}
-
-function drawRocks(): void {
-  noStroke();
-  for (const r of rocks) {
-    push();
-    translate(r.x, TANK.floorY - r.s * 0.35, r.z);
-    rotateY(r.r);
-    fill(r.c, r.c * 0.9, r.c * 0.78);
-    sphere(r.s, 8, 6);
-    pop();
-  }
-}
+// `drawFloor` and `drawCaustics` are imported from `aquarium-common`
 
 /* -------------------------------- KELP ---------------------------------- */
 function makeKelp(x: number, z: number): Kelp {
   const segs = 14;
   const h = random(180, 330);
+  const colA = color(96, 58, 12);
+  const colB = color(255, 196, 62);
   return {
     x,
     z,
@@ -614,8 +466,11 @@ function makeKelp(x: number, z: number): Kelp {
     speed: random(0.55, 1.05),
     sway: random(0.22, 0.42),
     dir: random(TWO_PI),
-    colA: color(96, 58, 12),
-    colB: color(255, 196, 62),
+    colA,
+    colB,
+    colGradient: Array.from({ length: segs }, (_, i) =>
+      lerpColor(colA, colB, Math.pow(i / segs, 0.65)),
+    ),
     tip: null,
   };
 }
@@ -623,81 +478,26 @@ function makeKelp(x: number, z: number): Kelp {
 function drawAllKelp(): void {
   noStroke();
   for (const k of kelps) {
-    drawKelp(k);
+    drawKelp(k, camState.right, t, TANK.floorY);
 
     if (k.tip && bubbles.length < 90 && random() < 0.008) {
-      bubbles.push(
-        makeBubble(
+      bubbles.push({
+        pos: createVector(
           k.tip.x + random(-8, 8),
           k.tip.y + random(-6, 2),
           k.tip.z + random(-8, 8),
-          random(3.5, 9),
         ),
-      );
+        size: random(3.5, 9),
+        speed: random(26, 58),
+        phase: random(TWO_PI),
+        wob: random(6, 20),
+        life: 0,
+      });
     }
   }
 }
 
-function drawKelp(k: Kelp): void {
-  const n = k.segs;
-  const pts: KelpPoint[] = [];
-
-  let px = k.x,
-    py = TANK.floorY,
-    pz = k.z;
-  let ang = 0;
-  const dirA = k.dir + Math.sin(t * 0.17 + k.phase) * 0.6;
-  const dx = Math.cos(dirA),
-    dz = Math.sin(dirA);
-
-  pts.push({ x: px, y: py, z: pz, w: k.width0 }); // anchored to the sand
-
-  for (let i = 0; i <= n; i++) {
-    const u = i / n;
-    ang += Math.sin(t * k.speed + k.phase + i * 0.55) * 0.17 * (0.35 + u * 1.2);
-    ang += 0.02;
-    px += Math.sin(ang) * k.segLen * dx;
-    pz += Math.sin(ang) * k.segLen * dz;
-    py -= Math.cos(ang) * k.segLen;
-    pts.push({ x: px, y: py, z: pz, w: k.width0 * (1 - u * 0.86) });
-  }
-  k.tip = pts[n];
-
-  const rx = camRight.x,
-    rz = camRight.z;
-
-  for (let i = 0; i < n; i++) {
-    const a = pts[i],
-      b = pts[i + 1];
-    const u = i / n;
-    fill(lerpColor(k.colA, k.colB, Math.pow(u, 0.65)));
-    beginShape();
-    vertex(a.x - rx * a.w * 0.5, a.y, a.z - rz * a.w * 0.5);
-    vertex(a.x + rx * a.w * 0.5, a.y, a.z + rz * a.w * 0.5);
-    vertex(b.x + rx * b.w * 0.5, b.y, b.z + rz * b.w * 0.5);
-    vertex(b.x - rx * b.w * 0.5, b.y, b.z - rz * b.w * 0.5);
-    endShape(CLOSE);
-  }
-
-  for (let i = 2; i < n - 1; i += 2) {
-    const a = pts[i];
-    const u = i / n;
-    const side = i % 4 === 0 ? 1 : -1;
-    const len = 26 + 20 * Math.sin(i * 1.7 + k.phase);
-    fill(
-      lerpColor(
-        lerpColor(k.colA, k.colB, Math.pow(u, 0.65)),
-        color(255, 232, 150),
-        0.3,
-      ),
-    );
-    beginShape();
-    vertex(a.x, a.y, a.z);
-    vertex(a.x + rx * side * a.w * 0.45, a.y + 2, a.z + rz * side * a.w * 0.45);
-    vertex(a.x + rx * side * len, a.y - len * 0.55, a.z + rz * side * len);
-    endShape(CLOSE);
-  }
-}
+// `drawKelp` is imported from `aquarium-common`
 
 /* -------------------------------- FISH ---------------------------------- */
 function drawAllFish(): void {
@@ -738,243 +538,51 @@ function drawAllFish(): void {
   // billboards blend in the correct order.
   const sorted = [...fishes].sort((a, b) => {
     const da =
-      (camX - a.pos.x) ** 2 + (camY - a.pos.y) ** 2 + (camZ - a.pos.z) ** 2;
+      (camState.x - a.pos.x) ** 2 +
+      (camState.y - a.pos.y) ** 2 +
+      (camState.z - a.pos.z) ** 2;
     const db =
-      (camX - b.pos.x) ** 2 + (camY - b.pos.y) ** 2 + (camZ - b.pos.z) ** 2;
+      (camState.x - b.pos.x) ** 2 +
+      (camState.y - b.pos.y) ** 2 +
+      (camState.z - b.pos.z) ** 2;
     return db - da; // farthest first
   });
 
-  for (const f of sorted) drawFish(f);
+  for (const f of sorted) drawFish(f, camState, frontView, t);
 }
 
-function drawFish(f: Fish): void {
-  push();
-  translate(f.pos.x, f.pos.y, f.pos.z);
-
-  // Billboard: face the camera.
-  // In front-view (ortho), every fish uses the same view direction so they
-  // stay perfectly flat; in orbit view we aim each fish at the camera.
-  let vx: number, vy: number, vz: number;
-  if (frontView) {
-    vx = -camX;
-    vy = -camY;
-    vz = -camZ; // global view direction
-  } else {
-    vx = camX - f.pos.x;
-    vy = camY - f.pos.y;
-    vz = camZ - f.pos.z;
-  }
-  rotateY(Math.atan2(vx, vz));
-  rotateX(-Math.atan2(vy, Math.sqrt(vx * vx + vz * vz)));
-
-  const fishDot = f.vel.x * camRight.x + f.vel.z * camRight.z;
-  const flip = fishDot < 0 ? -1 : 1;
-  const sy = 1 + Math.sin(t * 9 + f.fin) * 0.05;
-
-  scale(flip * f.size * 0.5, f.size * 0.5 * sy, 1);
-  noStroke();
-  texture(f.img);
-
-  drawingContext.depthMask(false);
-  plane(2, 1);
-  drawingContext.depthMask(true);
-
-  pop();
-}
+// `drawFish` is imported from `aquarium-common`
 
 /* ------------------------------- BUBBLES -------------------------------- */
-function makeBubble(x: number, y: number, z: number, size: number): Bubble {
-  return {
-    pos: createVector(x, y, z),
-    size: size,
-    speed: random(26, 58),
-    phase: random(TWO_PI),
-    wob: random(6, 20),
-    life: 0,
-  };
-}
-
-function drawAllBubbles(dt: number): void {
-  if (bubbles.length < 85 && random() < 0.02) {
-    bubbles.push(
-      makeBubble(
-        random(-TANK.w * 0.4, TANK.w * 0.4),
-        TANK.floorY - 4,
-        random(-TANK.d * 0.4, TANK.d * 0.4),
-        random(3, 8),
-      ),
-    );
-  }
-
-  noStroke();
-  for (let i = bubbles.length - 1; i >= 0; i--) {
-    const b = bubbles[i];
-
-    b.pos.y -= b.speed * dt;
-    b.pos.x += Math.sin(t * 1.7 + b.phase) * b.wob * dt;
-    b.pos.z += Math.cos(t * 1.3 + b.phase) * b.wob * dt;
-    b.life += dt;
-
-    if (b.pos.y < TANK.topY + 4 || b.life > 22) {
-      bubbles.splice(i, 1);
-      continue;
-    }
-
-    const dx = camX - b.pos.x;
-    const dy = camY - b.pos.y;
-    const dz = camZ - b.pos.z;
-    const bbAlpha = map(b.pos.y, TANK.topY, TANK.topY + 90, 0, 200, true);
-
-    push();
-    translate(b.pos.x, b.pos.y, b.pos.z);
-    rotateY(Math.atan2(dx, dz));
-    rotateX(-Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)));
-    texture(bubbleImg);
-    tint(255, bbAlpha);
-    plane(b.size, b.size);
-    noTint();
-    pop();
-  }
-}
+// `drawAllBubbles` is imported from `aquarium-common`
 
 /* -------------------------------- GLASS --------------------------------- */
-function drawGlass(): void {
-  push();
-  noFill();
-  stroke(150, 215, 245, 38);
-  strokeWeight(1.5);
-  box(TANK.w, TANK.h, TANK.d);
-  pop();
-}
+// `drawGlass` is imported from `aquarium-common`
 
 /* --------------------------- TEXTURE FACTORIES -------------------------- */
-
-type RGB = [number, number, number];
-
-function makeFishSprite(bodyC: RGB, finC: RGB, tailC: RGB): p5.Graphics {
-  const g = createGraphics(256, 128);
-  g.clear();
-  g.noStroke();
-
-  g.fill(tailC[0], tailC[1], tailC[2], 235);
-  g.beginShape();
-  g.vertex(56, 64);
-  g.vertex(8, 20);
-  g.vertex(20, 64);
-  g.vertex(8, 108);
-  g.endShape(CLOSE);
-
-  g.fill(finC[0], finC[1], finC[2], 225);
-  g.beginShape();
-  g.vertex(112, 30);
-  g.vertex(136, 6);
-  g.vertex(168, 32);
-  g.endShape(CLOSE);
-
-  g.beginShape();
-  g.vertex(118, 96);
-  g.vertex(140, 122);
-  g.vertex(168, 94);
-  g.endShape(CLOSE);
-
-  g.fill(bodyC[0], bodyC[1], bodyC[2], 245);
-  g.ellipse(124, 64, 152, 80);
-
-  g.fill(255, 255, 255, 45);
-  g.ellipse(130, 84, 110, 36);
-
-  g.fill(255, 255, 255, 40);
-  g.ellipse(96, 60, 16, 66);
-  g.ellipse(126, 62, 14, 70);
-
-  g.fill(255);
-  g.ellipse(180, 54, 26, 26);
-  g.fill(20, 24, 30);
-  g.ellipse(184, 55, 13, 13);
-  g.fill(255, 255, 255, 220);
-  g.ellipse(188, 50, 5, 5);
-
-  return g;
-}
-
-function makeBubbleSprite(): p5.Graphics {
-  const g = createGraphics(128, 128);
-  g.clear();
-  g.noStroke();
-
-  for (let r = 62; r > 0; r -= 2) {
-    const a = map(r, 62, 0, 6, 95);
-    g.fill(180, 225, 255, a);
-    g.ellipse(64, 64, r * 2, r * 2);
-  }
-
-  g.noFill();
-  g.stroke(220, 245, 255, 150);
-  g.strokeWeight(3);
-  g.ellipse(64, 64, 120, 120);
-
-  g.noStroke();
-  g.fill(255, 255, 255, 190);
-  g.ellipse(44, 42, 18, 14);
-
-  return g;
-}
-
-function makeSkyTexture(): p5.Graphics {
-  const g = createGraphics(32, 128);
-  g.strokeWeight(1);
-  for (let y = 0; y < 128; y++) {
-    const u = y / 127;
-    const c = lerpColor(
-      color(46, 128, 150),
-      color(2, 10, 22),
-      Math.pow(u, 0.85),
-    );
-    g.stroke(c);
-    g.line(0, y, 32, y);
-  }
-  return g;
-}
-
-function makeSandTexture(): p5.Graphics {
-  const g = createGraphics(256, 256);
-  g.noStroke();
-  g.background(206, 180, 132);
-  g.loadPixels();
-  for (let i = 0; i < g.width * g.height; i++) {
-    const x = i % g.width;
-    const y = Math.floor(i / g.width);
-    const n = noise(x * 0.04, y * 0.04);
-    const c = lerpColor(color(168, 140, 96), color(240, 222, 184), n);
-    g.pixels[i * 4 + 0] = red(c);
-    g.pixels[i * 4 + 1] = green(c);
-    g.pixels[i * 4 + 2] = blue(c);
-    g.pixels[i * 4 + 3] = 255;
-  }
-  g.updatePixels();
-  return g;
-}
+// `makeFishSprite`, `makeBubbleSprite`, `makeSkyTexture`, and `makeSandTexture`
+// are imported from `aquarium-common`
 
 /* ------------------------------ INPUT ----------------------------------- */
 function mousePressed(): void {
   if (frontView) return;
-  dragging = true;
-  lastMX = mouseX;
-  lastMY = mouseY;
-  idleTime = 0;
+  camState.dragging = true;
+  camState.idleTime = 0;
 }
 
 function mouseDragged(): void {
-  if (!dragging || frontView) return;
-  camTheta -= (mouseX - lastMX) * 0.006;
-  camPhi = constrain(camPhi - (mouseY - lastMY) * 0.004, -0.35, 1.15);
-  lastMX = mouseX;
-  lastMY = mouseY;
-  idleTime = 0;
+  if (!camState.dragging || frontView) return;
+  camState.theta -= (mouseX - (pmouseX || mouseX)) * 0.006;
+  camState.phi = constrain(
+    camState.phi - (mouseY - (pmouseY || mouseY)) * 0.004,
+    -0.35,
+    1.15,
+  );
+  camState.idleTime = 0;
 }
 
 function mouseReleased(): void {
-  dragging = false;
+  camState.dragging = false;
 }
 
 /* Scroll wheel: up = zoom in, down = zoom out ------------------------------ */
@@ -985,7 +593,7 @@ function mouseWheel(event: WheelEvent & { delta: number }): boolean {
     frontZoom = constrain(frontZoom * (1 - mouseSign * 0.12), 0.4, 4);
   } else {
     // Perspective zoom: move camera closer / farther.
-    camRadius = constrain(camRadius + mouseSign * 90, 400, 2600);
+    camState.radius = constrain(camState.radius + mouseSign * 90, 400, 2600);
   }
   return false; // stop page from scrolling
 }

@@ -10,6 +10,7 @@ export default function Aquarium() {
   useEffect(() => {
     let instance: any;
     let cancelled = false;
+    let ro: ResizeObserver | null = null;
 
     // dynamic import keeps p5 out of the server bundle entirely —
     // it's only ever loaded in the browser, after mount
@@ -18,10 +19,14 @@ export default function Aquarium() {
       const { sketch } = (await import("../../p5/aquarium")) as any;
       if (cancelled || !containerRef.current) return;
       instance = new p5(sketch, containerRef.current);
+
+      ro = new ResizeObserver(() => instance?.resizeToContainer?.());
+      ro.observe(containerRef.current);
     })();
 
     return () => {
       cancelled = true;
+      ro?.disconnect();
       instance?.customCleanup?.();
       instance?.remove();
     };

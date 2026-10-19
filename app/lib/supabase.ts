@@ -13,6 +13,40 @@ export type FishRow = {
   created_at: string;
 };
 
+export type EndangeredFishRow ={
+  id: string;
+  image_url: string;
+  created_at: string;
+  species: string;
+  population_history: { count: number; month: string }[];
+  fun_fact: string;
+}
+
+/* ------------------------------ history_of_endangered_fish ---------------------------------- */
+
+// this will be static information, unless new fish are added into the database when:
+// 1. more endangered fish are discovered, or
+// 2. the population of an existing endangered fish is updated
+// 3. the endangered fish is removed from the database (e.g. if it goes extinct)
+
+// For now, in these cases, a refresh is needed to update the aquarium with the new information.
+// TODO: 
+
+export async function getExistingEndangeredFish(): Promise<EndangeredFishRow[]> {
+  const { data, error } = await supabase
+    .from("history_of_endangered_fish")
+    .select("*")
+    .order("created_at", { ascending: true });
+  if (error) {
+    console.error("Failed to fetch existing endangered fish:", error);
+    return [];
+  }
+  return data ?? [];
+}
+
+
+/* ------------------------------ fish table ---------------------------------- */
+
 // fish already in the DB when the tank first loads
 export async function getExistingFish(): Promise<FishRow[]> {
   const { data, error } = await supabase
