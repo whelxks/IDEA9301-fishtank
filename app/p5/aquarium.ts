@@ -15,6 +15,7 @@ import {
   type Rock,
   type CameraState,
   createCommon,
+  isInsideCanvas,
 } from "./common-functions";
 
 /* =========================================================================
@@ -568,7 +569,9 @@ export function sketch(p: p5): void {
   // are imported from `aquarium-common`
 
   /* ------------------------------ INPUT ----------------------------------- */
+  
   p.mousePressed = () => {
+     if (!isInsideCanvas(p)) return;
     if (frontView) return;
     camState.dragging = true;
     camState.idleTime = 0;
@@ -591,6 +594,7 @@ export function sketch(p: p5): void {
 
   /* Scroll wheel: up = zoom in, down = zoom out ------------------------------ */
   p.mouseWheel = (event: any): boolean => {
+    if (!isInsideCanvas(p)) return true;  
     const mouseSign = Math.sign(event.delta);
     if (frontView) {
       // Orthographic zoom: shrink visible area to zoom in.

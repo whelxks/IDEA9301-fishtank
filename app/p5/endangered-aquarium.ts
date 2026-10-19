@@ -13,7 +13,9 @@ import {
   type Rock,
   type CameraState,
   createCommon,
+  isInsideCanvas,
 } from "./common-functions";
+import { addScreenPositionFunction } from "~/utils/addScreenPositionFunction";
 
 /* =========================================================================
    3D AQUARIUM — p5.js (WEBGL) — TypeScript
@@ -171,6 +173,7 @@ export function sketch(p: p5): void {
 
     const { w, h } = containerSize();
     p.createCanvas(w, h, p.WEBGL);
+    addScreenPositionFunction(p);
     p.perspective(p.PI / 3, w / h, 10, 7000);
     p.strokeCap(p.ROUND);
 
@@ -490,12 +493,15 @@ export function sketch(p: p5): void {
   }
 
   /* ------------------------------ INPUT ----------------------------------- */
+
   p.mousePressed = () => {
+    if (!isInsideCanvas(p)) return;
     // Check for fish click first
     let clickedFish: EndangeredFish | null = null;
 
     for (const f of fishes) {
-      // @ts-ignore - screenPosition is available in WEBGL global mode
+      // add external addScreenPositionFunction for screenPosition
+      // https://github.com/bohnacker/p5js-screenPosition
       const screenPos = (p as any).screenPosition(f.pos.x, f.pos.y, f.pos.z);
       const d = p.dist(p.mouseX, p.mouseY, screenPos.x, screenPos.y);
 
@@ -590,6 +596,7 @@ export function sketch(p: p5): void {
   };
 
   p.mouseWheel = (event: any): boolean => {
+    if (!isInsideCanvas(p)) return true;
     const mouseSign = Math.sign(event.delta);
     if (frontView) {
       frontZoom = p.constrain(frontZoom * (1 - mouseSign * 0.12), 0.4, 4);

@@ -696,3 +696,17 @@ export function createCommon(p: p5) {
     makeSandTexture,
   };
 }
+
+/**
+ * In p5 instance mode, mouse/wheel events fire on `window`, not on the canvas.
+ * `p.mouseX` / `p.mouseY` are canvas-relative (and NOT clamped), so a simple
+ * bounds check rejects events that landed on the other pane's canvas.
+ */
+export function isInsideCanvas(p: p5): boolean {
+  return (
+    p.mouseX >= 0 &&
+    p.mouseX <= p.width &&
+    p.mouseY >= 0 &&
+    p.mouseY <= p.height
+  );
+}
