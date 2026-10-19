@@ -98,7 +98,7 @@ export default function Home() {
               overflow: "hidden", // clips the child component
             }}
           >
-            {/* <EndangeredAquarium /> */}
+            <EndangeredAquarium />
           </div>
           <PaneLabel
             text="fishes in the past year"
