@@ -30,7 +30,7 @@ export type EndangeredFishRow ={
 // 3. the endangered fish is removed from the database (e.g. if it goes extinct)
 
 // For now, in these cases, a refresh is needed to update the aquarium with the new information.
-// TODO: 
+// TODO: Implement a subscription to the history_of_endangered_fish table to automatically update the aquarium when new fish are added or existing fish are updated/removed.
 
 export async function getExistingEndangeredFish(): Promise<EndangeredFishRow[]> {
   const { data, error } = await supabase

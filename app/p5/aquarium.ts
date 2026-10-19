@@ -157,7 +157,8 @@ export function sketch(p: p5): void {
         p.random(-130, 120),
         p.random(-TANK.d * 0.32, TANK.d * 0.32),
       ),
-      vel: p.createVector(p.random(-1, 1), 0, p.random(-1, 1))
+      vel: p
+        .createVector(p.random(-1, 1), 0, p.random(-1, 1))
         .normalize()
         .mult(p.random(1.1, 2.0)),
       speed: p.random(1.0, 2.1),
@@ -420,7 +421,7 @@ export function sketch(p: p5): void {
     const dt = Math.min(p.deltaTime, 50) * 0.001;
     t += dt;
 
-    common.updateCamera(camState, frontView, frontZoom, TANK.w, TANK.d);
+    common.updateCamera(camState, frontView, frontZoom);
 
     // Water dome
     p.push();
@@ -511,11 +512,9 @@ export function sketch(p: p5): void {
     for (const f of fishes) {
       const nz = p.noise(f.phase, t * 0.06);
       const targetAng = nz * p.TWO_PI * 2.2;
-      const desired = p.createVector(
-        Math.cos(targetAng),
-        0,
-        Math.sin(targetAng),
-      ).mult(f.speed);
+      const desired = p
+        .createVector(Math.cos(targetAng), 0, Math.sin(targetAng))
+        .mult(f.speed);
       desired.y = Math.sin(t * 0.8 + f.bob) * 0.4 + (f.baseY - f.pos.y) * 0.015;
 
       const mx = TANK.w * 0.5 - 90,
@@ -569,9 +568,9 @@ export function sketch(p: p5): void {
   // are imported from `aquarium-common`
 
   /* ------------------------------ INPUT ----------------------------------- */
-  
+
   p.mousePressed = () => {
-     if (!isInsideCanvas(p)) return;
+    if (!isInsideCanvas(p)) return;
     if (frontView) return;
     camState.dragging = true;
     camState.idleTime = 0;
@@ -594,14 +593,18 @@ export function sketch(p: p5): void {
 
   /* Scroll wheel: up = zoom in, down = zoom out ------------------------------ */
   p.mouseWheel = (event: any): boolean => {
-    if (!isInsideCanvas(p)) return true;  
+    if (!isInsideCanvas(p)) return true;
     const mouseSign = Math.sign(event.delta);
     if (frontView) {
       // Orthographic zoom: shrink visible area to zoom in.
       frontZoom = p.constrain(frontZoom * (1 - mouseSign * 0.12), 0.4, 4);
     } else {
       // Perspective zoom: move camera closer / farther.
-      camState.radius = p.constrain(camState.radius + mouseSign * 90, 400, 2600);
+      camState.radius = p.constrain(
+        camState.radius + mouseSign * 90,
+        400,
+        2600,
+      );
     }
     return false; // stop page from scrolling
   };

@@ -86,13 +86,136 @@ const KELP_RING_SEGS = 6;
  * without fighting over globals.
  */
 export function createCommon(p: p5) {
+  /* ---------------------- SCREEN-SPACE PROJECTION ------------------------ */
+  /**
+   * Project a world-space point to 2D canvas coordinates.
+   * Handles both ortho (front view) and perspective (orbit) modes
+   * WITHOUT touching p5 internals — mirrors the same math that
+   * `common.updateCamera` feeds into `p.camera(...)` and `p.ortho(...)`.
+   */
+  function projectToScreen(
+    cam: CameraState,
+    frontView: boolean,
+    frontZoom: number,
+    wx: number,
+    wy: number,
+    wz: number,
+  ): { x: number; y: number } {
+    if (frontView) {
+      const vh = 700 / frontZoom;
+      const vw = vh * (p.width / p.height);
+      return {
+        x: (wx / vw + 0.5) * p.width,
+        y: (0.5 - wy / vh) * p.height,
+      };
+    }
+    const ex = cam.x,
+      ey = cam.y,
+      ez = cam.z;
+    let fx = -ex,
+      fy = -ey,
+      fz = -ez;
+    const fl = Math.sqrt(fx * fx + fy * fy + fz * fz) || 1;
+    fx /= fl;
+    fy /= fl;
+    fz /= fl;
+
+    // right = normalize(cross(forward, worldUp)) with worldUp = (0,1,0)
+    let rx = -fz,
+      ry = 0,
+      rz = fx;
+    const rl = Math.sqrt(rx * rx + rz * rz) || 1;
+    rx /= rl;
+    ry /= rl;
+    rz /= rl;
+
+    // up = cross(right, forward)
+    const ux = ry * fz - rz * fy;
+    const uy = rz * fx - rx * fz;
+    const uz = rx * fy - ry * fx;
+
+    const px = wx - ex,
+      py = wy - ey,
+      pz = wz - ez;
+    const cx = px * rx + py * ry + pz * rz;
+    const cy = px * ux + py * uy + pz * uz;
+    const cz = px * fx + py * fy + pz * fz;
+
+    if (cz <= 0.001) return { x: -9999, y: -9999 };
+
+    const f = 1 / Math.tan(p.PI / 6);
+    const aspect = p.width / p.height;
+    const ndcX = ((f / aspect) * cx) / cz;
+    const ndcY = (f * cy) / cz;
+
+    return {
+      x: (ndcX + 1) * 0.5 * p.width,
+      y: (1 - ndcY) * 0.5 * p.height,
+    };
+  }
+
+  /* --------------------- SPOTLIGHT / GLOW SPRITE ------------------------- */
+  /** Soft radial glow used as a spotlight halo around the selected fish. */
+  function makeGlowSprite(): p5.Graphics {
+    const size = 512;
+    const g = p.createGraphics(size, size);
+    g.clear();
+    const ctx = (g as any).drawingContext as CanvasRenderingContext2D;
+    const grad = ctx.createRadialGradient(
+      size / 2,
+      size / 2,
+      0,
+      size / 2,
+      size / 2,
+      size / 2,
+    );
+    grad.addColorStop(0.0, "rgba(180, 230, 255, 0.85)");
+    grad.addColorStop(0.25, "rgba(127, 212, 255, 0.45)");
+    grad.addColorStop(0.6, "rgba(80, 160, 220, 0.12)");
+    grad.addColorStop(1.0, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, size, size);
+    return g;
+  }
+
+  /**
+   * Draw a billboarded additive glow behind the selected fish.
+   * Must be called AFTER `gl.clear(DEPTH_BUFFER_BIT)` so it sits on top
+   * of the dark overlay and BEFORE `drawFish(...)` so the sprite wins.
+   */
+  function drawSpotlightGlow(
+    f: Fish,
+    cam: CameraState,
+    frontView: boolean,
+    glowImg: p5.Graphics,
+  ): void {
+    p.push();
+    p.translate(f.pos.x, f.pos.y, f.pos.z);
+
+    const vx = frontView ? -cam.x : cam.x - f.pos.x;
+    const vy = frontView ? -cam.y : cam.y - f.pos.y;
+    const vz = frontView ? -cam.z : cam.z - f.pos.z;
+    p.rotateY(Math.atan2(vx, vz));
+    p.rotateX(-Math.atan2(vy, Math.sqrt(vx * vx + vz * vz)));
+
+    const pulse = 1 + Math.sin(p.frameCount * 0.08) * 0.06; // gentle breathing
+    const glowSize = f.size * 4.2 * pulse;
+
+    p.blendMode(p.ADD);
+    p.noStroke();
+    p.texture(glowImg);
+    p.plane(glowSize, glowSize);
+    p.blendMode(p.BLEND);
+
+    p.pop();
+  }
+
   /* ------------------------- CAMERA & MATH -------------------------------- */
   function updateCamera(
     cam: CameraState,
     frontView: boolean,
     frontZoom: number,
-    tankW: number,
-    tankD: number,
+    updateIdle = true, // NEW: spotlight pass reuses the camera without double-advancing idle
   ): void {
     if (frontView) {
       const vh = 700 / frontZoom;
@@ -102,7 +225,7 @@ export function createCommon(p: p5) {
       p.perspective(p.PI / 3, p.width / p.height, 10, 7000);
     }
 
-    if (!cam.dragging && !frontView) {
+    if (updateIdle && !cam.dragging && !frontView) {
       cam.idleTime += Math.min(p.deltaTime, 50) * 0.001;
       if (cam.idleTime > 3) cam.theta += 0.0016;
     }
@@ -450,13 +573,32 @@ export function createCommon(p: p5) {
     }
 
     // Leaves — same batch, same draw call
+    // Leaves — same batch, same draw call.
+    //
+    // Two parameters now drive leaf geometry:
+    //   1. heightScale — leaf LENGTH scales with the total spine height
+    //      (k.segs * k.segLen), so a short wilted kelp (≈60–120 px) gets
+    //      proportionally small leaves instead of oversized spikes, and a
+    //      tall healthy kelp (≈180–330 px) keeps its original proportions.
+    //   2. leafDroop   — extra downward ANGLE per unit of `droop` beyond
+    //      the healthy baseline of 0.02. Healthy kelp leaves are unchanged
+    //      (drop = 0.55 * len), wilted kelp leaves flop down
+    //      (drop = 1.15 * len at droop = 0.06).
+    const kelpHeight = k.segs * k.segLen;
+    const heightScale = kelpHeight / 250; // ~0.24 wilted → ~1.32 healthy
+    const leafDroop = Math.max(0, droop - 0.02) * 15; // 0 healthy → 0.6 wilted
+
     const crx = camRight.x,
       crz = camRight.z;
     for (let i = 2; i < n - 1; i += 2) {
       const a = pts[i];
       const base = k.colGradient[i];
       const side = i % 4 === 0 ? 1 : -1;
-      const len = 26 + 20 * Math.sin(i * 1.7 + k.phase);
+
+      // Base length × heightScale (proportional to the spine's total height)
+      const len = (26 + 20 * Math.sin(i * 1.7 + k.phase)) * heightScale;
+      // Tip drop × (baseline flop + droop-driven flop)
+      const tipDrop = len * (0.55 + leafDroop);
 
       const leafCol = p.lerpColor(base, p.color(255, 232, 150), 0.3);
       p.fill(leafCol);
@@ -467,11 +609,7 @@ export function createCommon(p: p5) {
         a.y + 2,
         a.z + crz * side * a.w * 0.45,
       );
-      p.vertex(
-        a.x + crx * side * len,
-        a.y - len * 0.55,
-        a.z + crz * side * len,
-      );
+      p.vertex(a.x + crx * side * len, a.y - tipDrop, a.z + crz * side * len);
     }
 
     p.endShape();
@@ -694,6 +832,9 @@ export function createCommon(p: p5) {
     makeBubbleSprite,
     makeSkyTexture,
     makeSandTexture,
+    projectToScreen,
+    makeGlowSprite,
+    drawSpotlightGlow,
   };
 }
 
