@@ -5,8 +5,7 @@ import {
   supabase,
   type FishRow,
 } from "../lib/supabase";
-
-// Import shared utilities
+import { applyGlassUI, HOLO_GLASS_OVERRIDES } from "../components/glass-ui";
 import {
   type Fish,
   type FishSprite,
@@ -17,6 +16,7 @@ import {
   createCommon,
   isInsideCanvas,
 } from "./common-functions";
+import "./aquarium-stats.css";
 
 /* =========================================================================
    3D AQUARIUM — p5.js (WEBGL) — TypeScript
@@ -28,6 +28,9 @@ import {
    • Drag to orbit.
    • Scroll wheel: zoom in / out.
    • Button (top-left): toggle FRONT VIEW (flat 2D) / ORBIT VIEW (3D).
+   • GLASS STAT STRIP (top row, beside the toggle): fish count, species
+     count, and the 3 most threatened species (holographic cards), plus a
+     full-width restoration-budget summary card underneath.
    • REALTIME: subscribeToNewFish() drops new fish into the tank the moment
      a row is inserted — the tank is never rebuilt or reloaded.
    ========================================================================= */
@@ -37,6 +40,18 @@ const TANK = { w: 780, h: 460, d: 460, floorY: 230, topY: -230 };
 
 const MIN_FISH = 9; // minimum school size when PNGs are present
 const NO_IMG_FISH = 9; // school size when no PNG loads at all
+
+/* ---------------------- BIODIVERSITY (THREAT) MODEL ---------------------
+   Demo conservation model used by the three holographic cards:
+   every species (the `outline` string on a Supabase row) should have
+   TARGET_PER_SPECIES fish in the tank. This is the "latest population
+   reading" the UI compares against; anything below it is a "deficit".
+   The dollar figure is the cost of restoring the missing fish.          */
+const TARGET_PER_SPECIES = 10;
+const RESTORATION_COST_PER_FISH = 250;
+
+/** Supabase rows carry the species as the `outline` string. */
+type FishRowWithSpecies = FishRow & { outline?: string | null };
 
 export function sketch(p: p5): void {
   const common = createCommon(p);
@@ -73,6 +88,21 @@ export function sketch(p: p5): void {
   const kelps: Kelp[] = [];
   const bubbles: Bubble[] = [];
   const rocks: Rock[] = [];
+
+  /** `outline` string → how many Supabase rows (fish) carry that species. */
+  const speciesCounts = new Map<string, number>();
+
+  /* Live DOM refs for the top-row stat cards (rebuilt on every mount). */
+  let statsWrap: p5.Element | null = null; // column wrapper (row + summary)
+  let statsRow: p5.Element | null = null; // the 5-card flex row
+  let statFishValue: HTMLElement | null = null;
+  let statSpeciesValue: HTMLElement | null = null;
+  let statSummaryText: HTMLElement | null = null; // summary budget <span>
+  let threatCards: Array<{
+    name: HTMLElement;
+    pct: HTMLElement;
+    pctSub: HTMLElement;
+  }> = [];
 
   let bubbleImg: p5.Graphics;
   let skyImg: p5.Graphics;
@@ -113,6 +143,18 @@ export function sketch(p: p5): void {
     frontZoom = 1;
     t = 0;
 
+    // Stat strip
+    speciesCounts.clear();
+    if (statsWrap) {
+      statsWrap.remove();
+      statsWrap = null;
+    }
+    statsRow = null;
+    statFishValue = null;
+    statSpeciesValue = null;
+    statSummaryText = null;
+    threatCards = [];
+
     // Reset camera state
     camState.theta = 0.7;
     camState.phi = 0.16;
@@ -124,6 +166,246 @@ export function sketch(p: p5): void {
   function customCleanup(): void {
     runId++; // invalidates any in-flight fetch / image load
     teardownRealtime();
+
+    if (statsWrap) {
+      statsWrap.remove();
+      statsWrap = null;
+    }
+    statsRow = null;
+    statFishValue = null;
+    statSpeciesValue = null;
+    statSummaryText = null;
+    threatCards = [];
+  }
+
+  /* ======================================================================
+     TOP-ROW STAT CARDS  (glass UI)
+     ---------------------------------------------------------------------
+     Layout (see `ensureHoloStyles`):
+       • `.aq-stats-wrap` is an absolutely-positioned **column** flex box
+         anchored beside the FRONT/ORBIT button.
+       • `.aq-stats-row` is the first child — a flex row of 5 cards. Each
+         card is `flex: 1 1 0; min-width: 112px`, so they stretch to fill
+         the remaining width AND share it equally.
+       • `.aq-stats-summary` is the second child — stretches to the full
+         width of the row above it and holds the restoration budget.
+       • Each card is a size container (`container-type: inline-size`), so
+         its fonts use `cqi` units and scale with the card's width.
+     ====================================================================== */
+
+  /** Create the DOM skeleton for one glass card. */
+  function makeCardNode(holo: boolean, delay = 0): HTMLElement {
+    const el = p.createDiv("");
+    const node = el.elt as HTMLElement;
+
+    node.className = "aq-stat-card" + (holo ? " aq-holo" : "");
+    if (holo) node.style.animationDelay = `${delay}s`;
+
+    applyGlassUI(el, holo ? HOLO_GLASS_OVERRIDES : {});
+
+    // Don't let a camera-orbit drag start on top of a card.
+    const stop = (e: Event) => e.stopPropagation();
+    node.addEventListener("mousedown", stop);
+    node.addEventListener("touchstart", stop, { passive: true });
+    node.addEventListener("wheel", stop, { passive: true });
+
+    return node;
+  }
+
+  /** Shorthand for a classed, styled text node. */
+  function txt(className: string, text = ""): HTMLElement {
+    const el = document.createElement("div");
+    el.className = className;
+    el.textContent = text;
+    return el;
+  }
+
+  function buildStatsUI(): void {
+    if (statsWrap) statsWrap.remove();
+
+    /* --- outer column wrapper (row + summary) ------------------------- */
+    const wrap = p.createDiv("");
+    statsWrap = wrap;
+    if ((p as any)._userNode) wrap.parent((p as any)._userNode);
+
+    const wrapNode = wrap.elt as HTMLElement;
+    wrapNode.className = "aq-stats-wrap";
+
+    // Anchor immediately to the right of the FRONT/ORBIT button and let it
+    // extend to the right edge of the container.
+    const btnWidth = (viewBtn.elt as HTMLElement).offsetWidth || 128;
+    wrapNode.style.top = "24px";
+    wrapNode.style.left = `${24 + btnWidth + 16}px`;
+    wrapNode.style.right = "24px";
+
+    /* --- 5-card flex row ---------------------------------------------- */
+    const row = p.createDiv("");
+    statsRow = row;
+    const rowNode = row.elt as HTMLElement;
+    rowNode.className = "aq-stats-row";
+    wrapNode.appendChild(rowNode);
+
+    const today = new Date().toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+
+    /* --- 1) how many fish rows are in the tank ------------------------- */
+    const fishCard = makeCardNode(false);
+    const fishValue = txt("aq-stat-value", "0");
+    statFishValue = fishValue;
+    fishCard.append(
+      txt("aq-stat-label", "Total Fish"),
+      fishValue,
+      txt("aq-stat-sub", `added ${today}`),
+    );
+    rowNode.appendChild(fishCard);
+
+    /* --- 2) unique species (`outline`) -------------------------------- */
+    const speciesCard = makeCardNode(false);
+    const speciesValue = txt("aq-stat-value", "0");
+    statSpeciesValue = speciesValue;
+    speciesCard.append(
+      txt("aq-stat-label", "Unique Species"),
+      speciesValue,
+      txt("aq-stat-sub", `added ${today}`),
+    );
+    rowNode.appendChild(speciesCard);
+
+    /* --- 3–5) top 3 most threatened species --------------------------- */
+    threatCards = [];
+    for (let i = 0; i < 3; i++) {
+      // Negative, staggered delays make neighbouring cards shimmer out of
+      // phase — subtle holographic feel.
+      const card = makeCardNode(true, -(i * 2.4));
+
+      const name = txt("aq-species-name", "—");
+      const pct = txt("aq-pct", "—");
+      const pctSub = txt("aq-pct-sub", ""); // "vs. latest population reading"
+      const pctLine = document.createElement("div");
+      pctLine.className = "aq-pct-line";
+      pctLine.append(pct, pctSub);
+
+      card.append(txt("aq-stat-label", `Threatened #${i + 1}`), name, pctLine);
+
+      rowNode.appendChild(card);
+      threatCards.push({ name, pct, pctSub });
+    }
+
+    /* --- full-width summary card (restoration budget) ----------------- */
+    const summaryEl = p.createDiv("");
+    const summaryNode = summaryEl.elt as HTMLElement;
+    summaryNode.className = "aq-stat-card aq-holo aq-stats-summary";
+    applyGlassUI(summaryEl, HOLO_GLASS_OVERRIDES);
+
+    // Match the other cards: don't let camera-orbit start on top of it.
+    const stopSummary = (e: Event) => e.stopPropagation();
+    summaryNode.addEventListener("mousedown", stopSummary);
+    summaryNode.addEventListener("touchstart", stopSummary, {
+      passive: true,
+    });
+    summaryNode.addEventListener("wheel", stopSummary, { passive: true });
+
+    const summaryValue = document.createElement("div");
+    summaryValue.className = "aq-summary-value";
+
+    const summaryText = document.createElement("span");
+    summaryText.className = "aq-summary-text";
+    summaryText.textContent = "$0 needed for restoration";
+    statSummaryText = summaryText;
+
+    // ⓘ tooltip explaining the calculation.
+    const infoWrap = document.createElement("span");
+    infoWrap.className = "aq-info-wrap";
+    infoWrap.tabIndex = 0;
+    infoWrap.setAttribute("role", "note");
+    infoWrap.setAttribute(
+      "aria-label",
+      "How the restoration budget is calculated",
+    );
+
+    const infoIcon = document.createElement("span");
+    infoIcon.className = "aq-info-icon";
+    infoIcon.textContent = "i";
+    infoIcon.setAttribute("aria-hidden", "true");
+
+    const infoPop = document.createElement("span");
+    infoPop.className = "aq-info-pop";
+    infoPop.textContent =
+      "Restoration budget = Σ over the 3 most threatened species of " +
+      "(target population − current count) × restoration cost per fish. " +
+      "In this demo, every species uses the same flat rate, but in the real " +
+      "system each endangered species has its own restoration cost per fish, " +
+      "determined by experienced marine scientists";
+
+    infoWrap.append(infoIcon, infoPop);
+    summaryValue.append(summaryText, infoWrap);
+    summaryNode.appendChild(summaryValue);
+    wrapNode.appendChild(summaryNode);
+
+    refreshStats();
+  }
+
+  function prettySpecies(raw: string): string {
+    return raw.replace(/[_-]+/g, " ").trim() || "Unknown species";
+  }
+
+  /** Recompute counts + threatened species and write them into the cards. */
+  function refreshStats(): void {
+    if (statFishValue) statFishValue.textContent = String(seenFishIds.size);
+    if (statSpeciesValue) {
+      statSpeciesValue.textContent = String(speciesCounts.size);
+    }
+
+    const ranked = [...speciesCounts.entries()]
+      .map(([name, count]) => {
+        const deficit = Math.max(0, TARGET_PER_SPECIES - count);
+        return {
+          name,
+          count,
+          deficit,
+          pct: (deficit / TARGET_PER_SPECIES) * 100,
+          cost: deficit * RESTORATION_COST_PER_FISH,
+        };
+      })
+      // Most threatened first (biggest gap, then scarcest species).
+      .sort((a, b) => b.deficit - a.deficit || a.count - b.count);
+
+    for (let i = 0; i < threatCards.length; i++) {
+      const card = threatCards[i];
+      const s = ranked[i];
+
+      if (!s || s.deficit <= 0) {
+        card.name.textContent = "—";
+        card.name.title = "";
+        card.pct.textContent = "—";
+        card.pct.style.color = "rgba(255,255,255,0.4)";
+        card.pct.style.textShadow = "none";
+        card.pctSub.textContent = "";
+        continue;
+      }
+
+      card.name.textContent = prettySpecies(s.name);
+      card.name.title =
+        `${s.name}: ${s.count} in tank ` +
+        `(latest reading ${TARGET_PER_SPECIES})`;
+      card.pct.textContent = `-${Math.round(s.pct)}%`;
+      card.pct.style.color = "#ff9d7a";
+      card.pct.style.textShadow = "0 0 14px rgba(255, 130, 90, 0.6)";
+      // Side label clarifying what the % is measuring.
+      card.pctSub.textContent = "vs. latest population reading";
+    }
+
+    // Summary: restoration budget for the 3 most threatened species.
+    const totalCost = ranked
+      .filter((s) => s.deficit > 0)
+      .slice(0, 3)
+      .reduce((sum, s) => sum + s.cost, 0);
+
+    if (statSummaryText) {
+      statSummaryText.textContent = `$${totalCost.toLocaleString("en-US")} needed for restoration`;
+    }
   }
 
   /* ------------------------- FISH LOADING / SPAWN ------------------------- */
@@ -258,6 +540,9 @@ export function sketch(p: p5): void {
     viewBtn.style("cursor", "pointer");
     viewBtn.style("outline", "none");
     viewBtn.mousePressed(toggleView);
+
+    // --- Glass stat strip (top row + summary, beside the toggle) -----------
+    buildStatsUI();
   };
 
   /* ------------------- SUPABASE: INITIAL LOAD + REALTIME ------------------ */
@@ -270,6 +555,13 @@ export function sketch(p: p5): void {
   let tankReady = false;
   /** Handle returned by subscribeToNewFish (channel or unsubscribe fn). */
   let fishChannel: ReturnType<typeof subscribeToNewFish> | null = null;
+
+  /** Count a Supabase row toward its species (`outline`). */
+  function trackSpecies(row: FishRow): void {
+    const raw = (row as FishRowWithSpecies).outline;
+    const key = (raw ?? "").toString().trim() || "unknown";
+    speciesCounts.set(key, (speciesCounts.get(key) ?? 0) + 1);
+  }
 
   function initFishFromSupabase(): void {
     // A previous mount may have left a live channel. If we don't drop it,
@@ -301,8 +593,12 @@ export function sketch(p: p5): void {
     for (const row of rows) {
       if (!row || !row.id || seenFishIds.has(row.id)) continue;
       seenFishIds.add(row.id);
+      trackSpecies(row);
       if (row.image_url) FISH_FILES.push(row.image_url);
     }
+
+    // Stat strip: fish rows + species counts are now known.
+    refreshStats();
 
     // Load every URL, then spawn the school once (never again).
     common.loadFishImages(FISH_FILES, (imgs) => {
@@ -329,6 +625,8 @@ export function sketch(p: p5): void {
   function handleNewFishRow(row: FishRow): void {
     if (!row || !row.id || seenFishIds.has(row.id)) return;
     seenFishIds.add(row.id);
+    trackSpecies(row);
+    refreshStats();
 
     // Tank still building? Buffer it and replay once we're live.
     if (!tankReady) {

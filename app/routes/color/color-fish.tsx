@@ -24,6 +24,7 @@ type OutlineDef = {
   draw: (ctx: CanvasRenderingContext2D, w: number, h: number) => void;
 };
 
+// TODO: run imageToPath once endangered fish outlines are available
 const FISH_OUTLINES: Record<string, OutlineDef> = {
   classic: {
     label: "Classic",

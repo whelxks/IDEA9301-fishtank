@@ -26,6 +26,23 @@ export type GlassUIOverrides = Partial<
   Record<keyof typeof GLASS_UI_CSS, string>
 >;
 
+/* Holographic overrides for the glass helper — brighter border, layered
+   neon glow, and an animated iridescent gradient (see ensureHoloStyles). */
+export const HOLO_GLASS_OVERRIDES: GlassUIOverrides = {
+  background:
+    "linear-gradient(120deg, " +
+    "rgba(0, 205, 255, 0.20) 0%, " +
+    "rgba(120, 90, 255, 0.18) 38%, " +
+    "rgba(255, 80, 200, 0.16) 66%, " +
+    "rgba(0, 205, 255, 0.20) 100%)",
+  border: "1px solid rgba(150, 235, 255, 0.6)",
+  boxShadow:
+    "0 0 18px rgba(80, 215, 255, 0.5), " +
+    "0 0 44px rgba(140, 110, 255, 0.32), " +
+    "inset 0 0 22px rgba(120, 220, 255, 0.2), " +
+    "inset 0 0 0 1px rgba(255, 255, 255, 0.18)",
+};
+
 function kebabCase(camel: string): string {
   return camel.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase());
 }
