@@ -869,7 +869,7 @@ export function sketch(p: p5): void {
         "
       >
         <h2 style="margin:0 0 8px 0;color:#7fd4ff;font-size:17px;text-shadow: 0 0 10px rgba(127, 212, 255, 0.5);">Sightings — ${f.species}</h2>
-        <div style="position:relative;width:100%;height:300px;">
+        <div style="position:relative;width:100%;height:240px;">
           <canvas id="${chartCanvasId}"></canvas>
         </div>
       </div>
