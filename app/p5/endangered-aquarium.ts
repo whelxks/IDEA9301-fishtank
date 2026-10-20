@@ -3,7 +3,6 @@ import {
   getExistingEndangeredFish,
   type EndangeredFishRow,
 } from "../lib/supabase";
-import type { TooltipItem, ChartType } from "chart.js";
 import {
   type Fish,
   type FishSprite,
@@ -886,8 +885,8 @@ export function sketch(p: p5): void {
           2,
           Math.min(chart.height - boxH - 2, yCur - boxH - markerGap),
         );
-        console.log(boxY);
-        roundRectPath(ctx, boxX, boxY, boxW, boxH, 6);
+
+        pillPath(ctx, boxX, boxY, boxW, boxH);
         ctx.fillStyle = up
           ? "rgba(12, 46, 26, 0.95)"
           : "rgba(56, 16, 16, 0.95)";
@@ -905,21 +904,20 @@ export function sketch(p: p5): void {
       },
     };
 
-    function roundRectPath(
+    function pillPath(
       ctx: CanvasRenderingContext2D,
       x: number,
       y: number,
       w: number,
       h: number,
-      r: number,
     ): void {
-      const rr = Math.min(r, w / 2, h / 2);
+      const r = Math.min(w, h) / 2;
       ctx.beginPath();
-      ctx.moveTo(x + rr, y);
-      ctx.arcTo(x + w, y, x + w, y + h, rr);
-      ctx.arcTo(x + w, y + h, x, y + h, rr);
-      ctx.arcTo(x, y + h, x, y, rr);
-      ctx.arcTo(x, y, x + w, y, rr);
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
       ctx.closePath();
     }
 
