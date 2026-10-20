@@ -13,7 +13,7 @@ type PaneLabelProps = {
 export function PaneLabel({
   text,
   color = "#7fd4ff",
-  size = 40,
+  size = 20,
   left = "0%",
   width = "100%",
   bottom = 24,
@@ -29,7 +29,6 @@ export function PaneLabel({
         textAlign: "center",
         color,
         pointerEvents: "none",
-        fontFamily: "'MarinaSundaland', sans-serif",
         fontSize: size,
         ...style,
       }}

@@ -3,7 +3,7 @@ import {
   getExistingEndangeredFish,
   type EndangeredFishRow,
 } from "../lib/supabase";
-
+import type { TooltipItem, ChartType } from "chart.js";
 import {
   type Fish,
   type FishSprite,
@@ -16,16 +16,21 @@ import {
 } from "./common-functions";
 
 /* =========================================================================
-   3D AQUARIUM — p5.js (WEBGL) — TypeScript
+   3D AQUARIUM — ENDANGERED FISH — p5.js (WEBGL) — TypeScript
    -------------------------------------------------------------------------
-   • Focuses on ENDANGERED FISH species from Supabase
-     (`history_of_endangered_fish`).
    • Fish are clickable. Clicking a fish dims the scene, spotlights the fish
-     with an additive glow, and shows a callout with its species, fun fact,
-     and a Chart.js curve of its population history (current month highlighted).
+     with an additive glow, and shows:
+        - a callout (species + fun fact) hovering ABOVE the clicked fish
+        - a bottom-centre chart panel with the population history. The
+          panel sits on a black rectangle whose edges radiate black outward
+          and fade to transparent (via layered box-shadow), and stretches to
+          the full canvas width.
+   • Dragging across the chart highlights the nearest data point and sets the
+     spotlighted fish's opacity to (count - min) / (max - min), so lowering
+     the scrubber fades the fish out — a visual read on how the population
+     compares to its own historical range.
    • Clicking empty space deselects and restores the tank.
-   • Chart.js is loaded globally from `Layout.tsx` (window.Chart), not fetched
-     per-sketch — see the <script> tag in the layout's <head>.
+   • Chart.js is loaded globally from `Layout.tsx` (window.Chart).
    ========================================================================= */
 
 const TANK = { w: 780, h: 460, d: 460, floorY: 230, topY: -230 };
@@ -35,6 +40,18 @@ interface EndangeredFish extends Fish {
   species: string;
   funFact: string;
   populationHistory: { count: number; month: string }[];
+}
+
+interface AbsDivOptions {
+  parent?: HTMLElement;
+  id?: string;
+  width?: string;
+  padding?: string;
+  background?: string;
+  border?: string;
+  borderRadius?: string;
+  zIndex?: string;
+  boxShadow?: string;
 }
 
 export function sketch(p: p5): void {
@@ -59,18 +76,21 @@ export function sketch(p: p5): void {
   let savedRadius = 1080;
   let viewBtn: p5.Element;
 
-  /* [NEW] Interaction mode toggle.
-     selectMode = true  → presses select a fish (never drag the tank)
-     selectMode = false → presses drag the tank (never select a fish)      */
   let selectMode = true;
   let modeBtn: p5.Element;
-
-  /* [NEW] Tracks whether the current press turned into a real drag, so a
-     tap in drag-mode can still close an open callout.                     */
   let dragMoved = false;
 
   let selectedFish: EndangeredFish | null = null;
+  /**
+   * Opacity applied to the spotlighted fish. Derived from the count ratio of
+   * whichever chart point is currently highlighted: (count - min)/(max - min),
+   * mapped into [0.15, 1] so the fish never fully disappears.
+   */
+  let selectedOpacity = 1;
+
   let calloutDiv: p5.Element;
+  let chartDiv: p5.Element;
+
   let currentChart: any = null;
   let chartCleanup: (() => void) | null = null;
 
@@ -100,6 +120,34 @@ export function sketch(p: p5): void {
     };
   }
 
+  /* ---------------------- ABSOLUTE-DIV FACTORY --------------------------- */
+  function createAbsoluteDiv(opts: AbsDivOptions): p5.Element {
+    const el = p.createDiv("");
+    if (opts.id) el.id(opts.id);
+    if (opts.parent) el.parent(opts.parent);
+
+    el.style("position", "absolute");
+    el.style("display", "none");
+    el.style("box-sizing", "border-box");
+    el.style("background", opts.background ?? "rgba(10, 34, 51, 0.95)");
+    el.style("color", "#fff");
+    el.style("border", opts.border ?? "1px solid #2a6a99");
+    el.style("border-radius", opts.borderRadius ?? "8px");
+    el.style("padding", opts.padding ?? "16px");
+    el.style("font-family", "var(--font-sans)");
+    if (opts.width) el.style("width", opts.width);
+    el.style("pointer-events", "auto");
+    el.style("z-index", opts.zIndex ?? "1000");
+    el.style("box-shadow", opts.boxShadow ?? "0 4px 20px rgba(0,0,0,0.5)");
+
+    const stopEvt = (e: Event) => e.stopPropagation();
+    el.elt.addEventListener("mousedown", stopEvt);
+    el.elt.addEventListener("touchstart", stopEvt, { passive: true });
+    el.elt.addEventListener("wheel", stopEvt, { passive: true });
+
+    return el;
+  }
+
   /* ------------------------- STATE RESET ---------------------------- */
   function resetState(): void {
     fishes.length = 0;
@@ -117,10 +165,10 @@ export function sketch(p: p5): void {
     camState.idleTime = 99;
     selectMode = true;
     dragMoved = false;
+    selectedOpacity = 1;
     deselect();
   }
 
-  /** Tear down any Chart.js instance and its drag listeners. */
   function destroyChart(): void {
     if (chartCleanup) {
       try {
@@ -140,10 +188,11 @@ export function sketch(p: p5): void {
     }
   }
 
-  /** Clear the spotlight and callout; destroy any Chart.js instance. */
   function deselect(): void {
     selectedFish = null;
+    selectedOpacity = 1;
     if (calloutDiv) calloutDiv.hide();
+    if (chartDiv) chartDiv.hide();
     destroyChart();
   }
 
@@ -151,11 +200,12 @@ export function sketch(p: p5): void {
     runId++;
     destroyChart();
     if (calloutDiv) calloutDiv.remove();
+    if (chartDiv) chartDiv.remove();
     if (modeBtn) modeBtn.remove();
+    if (viewBtn) viewBtn.remove();
   }
 
   /* ------------------------- FISH LOADING / SPAWN ------------------------- */
-
   function makeFish(img: FishSprite, row?: EndangeredFishRow): EndangeredFish {
     return {
       img,
@@ -174,9 +224,7 @@ export function sketch(p: p5): void {
       fin: p.random(p.TWO_PI),
       bob: p.random(p.TWO_PI),
       baseY: p.random(-120, 110),
-
       id: row ? String(row.id) : `fallback-${Math.random()}`,
-
       species: row?.species ?? "Data Pending",
       funFact: row?.fun_fact ?? "No information available for this entry.",
       populationHistory: row?.population_history ?? [],
@@ -199,36 +247,36 @@ export function sketch(p: p5): void {
 
     camState.right = p.createVector(1, 0, 0);
 
-    // --- Callout UI Overlay -------------------------------------------------
-    calloutDiv = p.createDiv("");
-    calloutDiv.id("fish-callout");
-    if ((p as any)._userNode) calloutDiv.parent((p as any)._userNode);
-    calloutDiv.style("position", "absolute");
-    calloutDiv.style("display", "none");
-    calloutDiv.style("background", "rgba(10, 34, 51, 0.95)");
-    calloutDiv.style("color", "#fff");
-    calloutDiv.style("border", "1px solid #2a6a99");
-    calloutDiv.style("border-radius", "8px");
-    calloutDiv.style("padding", "16px");
-    calloutDiv.style("font-family", "sans-serif");
-    calloutDiv.style("width", "320px");
-    calloutDiv.style("pointer-events", "auto");
-    calloutDiv.style("z-index", "1000");
-    calloutDiv.style("box-shadow", "0 4px 20px rgba(0,0,0,0.5)");
+    // --- Overlay UI -------------------------------------------------------
+    const parentNode = (p as any)._userNode as HTMLElement | undefined;
 
-    // Don't let callout interactions reach the p5 canvas.
-    const stopEvt = (e: Event) => e.stopPropagation();
-    calloutDiv.elt.addEventListener("mousedown", stopEvt);
-    calloutDiv.elt.addEventListener("touchstart", stopEvt, { passive: true });
-    calloutDiv.elt.addEventListener("wheel", stopEvt, { passive: true });
+    // Callout: solid, pinned above the fish.
+    calloutDiv = createAbsoluteDiv({
+      parent: parentNode,
+      id: "fish-callout",
+      width: "320px",
+      background: "rgba(10, 34, 51, 0.95)",
+    });
 
-    // --- Procedural textures ------------------------------------------------
+    // Chart panel: outer shell is transparent with a radial glow; the inner
+    // black rectangle is created fresh per-fish (see showCallout) and is
+    // what actually carries the radiating box-shadow.
+    chartDiv = createAbsoluteDiv({
+      parent: parentNode,
+      id: "fish-chart",
+      padding: "0px", // theres alr padding in the outside container
+      background: "transparent",
+      border: "none",
+      borderRadius: "0",
+      boxShadow: "none",
+    });
+
+    // --- Textures & fallbacks ---------------------------------------------
     bubbleImg = common.makeBubbleSprite();
     skyImg = common.makeSkyTexture();
     sandImg = common.makeSandTexture();
     glowImg = common.makeGlowSprite();
 
-    // --- Fish fallback sprites ---------------------------------------------
     const palettes: Array<
       [
         [number, number, number],
@@ -276,7 +324,7 @@ export function sketch(p: p5): void {
       });
     }
 
-    // --- View toggle button --------------------------------------------------
+    // --- View toggle button ----------------------------------------------
     viewBtn = p.createButton("FRONT VIEW");
     if ((p as any)._userNode) viewBtn.parent((p as any)._userNode);
     viewBtn.position(24, 24);
@@ -285,23 +333,23 @@ export function sketch(p: p5): void {
     viewBtn.style("color", "#7fd4ff");
     viewBtn.style("border", "1px solid #2a6a99");
     viewBtn.style("border-radius", "8px");
-    viewBtn.style("font-family", "sans-serif");
+    viewBtn.style("font-family", "var(--font-sans)");
     viewBtn.style("font-size", "13px");
     viewBtn.style("letter-spacing", "1.5px");
     viewBtn.style("cursor", "pointer");
     viewBtn.style("outline", "none");
     viewBtn.mousePressed(toggleView);
 
-    // --- [NEW] Interaction-mode toggle (beside the view button) -------------
+    // --- Interaction-mode toggle -----------------------------------------
     modeBtn = p.createButton("FISH CLICK: ON");
     if ((p as any)._userNode) modeBtn.parent((p as any)._userNode);
-    modeBtn.position(170, 24); // provisional — repositioned once laid out
+    modeBtn.position(170, 24);
     modeBtn.style("padding", "10px 18px");
     modeBtn.style("background", "rgba(10, 34, 51, 0.85)");
     modeBtn.style("color", "#7fd4ff");
     modeBtn.style("border", "1px solid #2a6a99");
     modeBtn.style("border-radius", "8px");
-    modeBtn.style("font-family", "sans-serif");
+    modeBtn.style("font-family", "var(--font-sans)");
     modeBtn.style("font-size", "13px");
     modeBtn.style("letter-spacing", "1.5px");
     modeBtn.style("cursor", "pointer");
@@ -342,7 +390,6 @@ export function sketch(p: p5): void {
     };
   }
 
-  /* ------------------- STATIC DATA LOAD ------------------ */
   async function loadExistingFish(run: number): Promise<void> {
     let rows: EndangeredFishRow[] = [];
     try {
@@ -399,10 +446,9 @@ export function sketch(p: p5): void {
     camState.dragging = false;
   }
 
-  /* ------------------- [NEW] INTERACTION MODE TOGGLE --------------------- */
   function toggleSelectMode(): void {
     selectMode = !selectMode;
-    camState.dragging = false; // abort any in-flight drag
+    camState.dragging = false;
     dragMoved = false;
 
     if (selectMode) {
@@ -424,8 +470,6 @@ export function sketch(p: p5): void {
     const dt = Math.min(p.deltaTime, 50) * 0.001;
     t += dt;
 
-    // Freeze camera auto-rotation while a fish is selected, so the
-    // spotlighted fish (and its callout) stay exactly where clicked.
     if (selectedFish) camState.idleTime = 0;
 
     common.updateCamera(camState, frontView, frontZoom);
@@ -480,8 +524,7 @@ export function sketch(p: p5): void {
 
     /* --- Spotlight / Selection ------------------------------------------- */
     if (selectedFish) {
-      // 1. Full-screen dark overlay — uses ortho in screen space so it
-      //    covers the entire canvas regardless of the current projection.
+      // 1. Dim the scene in screen space.
       p.push();
       p.resetMatrix();
       p.ortho(0, p.width, 0, p.height, -1, 1);
@@ -490,19 +533,22 @@ export function sketch(p: p5): void {
       p.rect(0, 0, p.width, p.height);
       p.pop();
 
-      // 2. Restore the real camera + projection, then clear depth so the
-      //    spotlighted fish paints on top of everything.
+      // 2. Restore camera, clear depth so the fish paints on top.
       common.updateCamera(camState, frontView, frontZoom, false);
       const gl = p.drawingContext as WebGL2RenderingContext;
       gl.clear(gl.DEPTH_BUFFER_BIT);
 
-      // 3. Additive glow behind the fish.
+      // 3. Glow behind the fish.
       common.drawSpotlightGlow(selectedFish, camState, frontView, glowImg);
 
-      // 4. The spotlighted fish itself.
+      // 4. Spotlighted fish, opacity driven by the chart scrubber.
+      //    NOTE: if common.drawFish() calls noTint() internally, remove that
+      //    call or move the tint inside that function for this to take effect.
+      p.tint(255, Math.round(selectedOpacity * 255));
       common.drawFish(selectedFish, camState, frontView, t, true);
+      p.noTint();
 
-      // 5. Move the callout to hover ABOVE the fish.
+      // 5. Keep the callout hovering above the fish.
       updateCalloutPosition();
     }
   };
@@ -511,7 +557,6 @@ export function sketch(p: p5): void {
   function updateFishMovement(dt: number): void {
     const fishStep = Math.min(dt * 60, 2.5);
     for (const f of fishes) {
-      // The selected fish holds still; everything else keeps swimming.
       if (selectedFish && f.id === selectedFish.id) continue;
 
       const nz = p.noise(f.phase, t * 0.06);
@@ -540,11 +585,6 @@ export function sketch(p: p5): void {
   }
 
   /* ---------------------- HIT-TEST HELPERS ------------------------------- */
-  /**
-   * Approximate the fish's on-screen radius by projecting three world-space
-   * offsets. Tracks perspective, front-view zoom, and orbit rotation — unlike
-   * a fixed pixel radius.
-   */
   function projectedScreenRadius(f: EndangeredFish): number {
     const center = common.projectToScreen(
       camState,
@@ -575,35 +615,33 @@ export function sketch(p: p5): void {
       const d = Math.hypot(s.x - center.x, s.y - center.y);
       if (d > maxD) maxD = d;
     }
-
-    // Generous margin + hard floor (front view's camera is further back,
-    // so sprites render physically smaller — the floor keeps them clickable).
     return Math.max(maxD * 1.5, 30);
+  }
+
+  function isOverOverlay(): boolean {
+    const canvasEl = (p as any).canvas as HTMLCanvasElement | undefined;
+    if (!canvasEl) return false;
+    const cr = canvasEl.getBoundingClientRect();
+    const cx = cr.left + p.mouseX;
+    const cy = cr.top + p.mouseY;
+    for (const d of [calloutDiv, chartDiv]) {
+      if (!d || d.elt.style.display === "none") continue;
+      const r = d.elt.getBoundingClientRect();
+      if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /* ------------------------------ INPUT ----------------------------------- */
   p.mousePressed = () => {
-    // Callout guard: ignore presses landing on the callout (chart drag, etc.).
-    if (calloutDiv && calloutDiv.elt.style.display !== "none") {
-      const canvasEl = (p as any).canvas as HTMLCanvasElement | undefined;
-      if (canvasEl) {
-        const cr = canvasEl.getBoundingClientRect();
-        const r = calloutDiv.elt.getBoundingClientRect();
-        const cx = cr.left + p.mouseX;
-        const cy = cr.top + p.mouseY;
-        if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) {
-          return;
-        }
-      }
-    }
-
-    // Click outside canvas → close callout (works in both modes).
+    if (isOverOverlay()) return;
     if (!isInsideCanvas(p)) {
       if (selectedFish) deselect();
       return;
     }
 
-    /* ---------- SELECT MODE: press = fish click. No drag ever. ---------- */
     if (selectMode) {
       type Info = { fish: EndangeredFish; d: number; r: number; score: number };
       const infos: Info[] = [];
@@ -623,15 +661,11 @@ export function sketch(p: p5): void {
         infos.push({ fish: f, d, r, score: d / r });
       }
 
-      // Primary: any fish whose hit circle contains the click.
-      // Tie-break: most-centred first, larger projected radius second
-      // (bigger on screen ⇒ drawn on top).
       const inside = infos
         .filter((i) => i.score <= 1)
         .sort((a, b) => a.score - b.score || b.r - a.r);
       let clickedFish: EndangeredFish | null = inside[0]?.fish ?? null;
 
-      // Fallback: nearest fish within 45 px of its silhouette (near-miss).
       if (!clickedFish) {
         const nearest = infos
           .map((i) => ({ ...i, gap: i.d - i.r }))
@@ -650,9 +684,8 @@ export function sketch(p: p5): void {
       return;
     }
 
-    /* ---------- DRAG MODE: press = potential drag. No fish click. ---------- */
     dragMoved = false;
-    if (frontView) return; // front view has nothing to orbit
+    if (frontView) return;
     camState.dragging = true;
     camState.idleTime = 0;
   };
@@ -660,48 +693,76 @@ export function sketch(p: p5): void {
   /* ------------------------------ CALLOUT -------------------------------- */
   function showCallout(f: EndangeredFish): void {
     destroyChart();
-
-    const chartCanvasId = `fish-chart-${f.id.replace(/[^a-z0-9]/gi, "")}`;
-
-    calloutDiv.html(`
-      <h2 style="margin:0 0 8px 0;color:#7fd4ff;font-size:17px;">${f.species}</h2>
-      <p style="margin:0 0 10px 0;font-size:12px;line-height:1.45;color:#cfd;">
-        <strong>Fun Fact:</strong> ${f.funFact}
-      </p>
-      <div style="font-size:11px;color:#8aa;margin-bottom:6px;">
-        <strong>Population History</strong>
-      </div>
-      <div style="background:rgba(0,0,0,0.25);border-radius:6px;padding:6px;">
-        <canvas id="${chartCanvasId}" width="288" height="120"></canvas>
-      </div>
-      <div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(127,212,255,0.15);font-size:11px;color:#666;text-align:center;">
-        Click outside to close
-      </div>
-    `);
-    calloutDiv.show();
-
     if (!selectedFish || selectedFish.id !== f.id) return;
 
+    /* ---------- 1. Callout: name + fun fact (above the fish) ---------- */
+    calloutDiv.html(`
+      <h2 style="margin:0 0 8px 0;color:#7fd4ff;font-size:17px;">${f.species}</h2>
+      <p style="margin:0 0 8px 0;font-size:12px;line-height:1.45;color:#cfd;">
+        <strong>Fun Fact:</strong> ${f.funFact}
+      </p>
+      <p style="margin:0;font-size:12px;line-height:1.45;color:#cfd;">
+        <strong>Why should you care:</strong> ${f.funFact}
+      </p>
+           <div
+        data-close-btn="1"
+        style="
+          margin-top:12px;font-size:11px;color:#7a8a99;
+          text-align:center;cursor:pointer;
+        "
+      >Click outside to close</div>
+    `);
+    calloutDiv.show();
+    updateCalloutPosition();
+
+    /* ---------- 2. Chart panel: outer shell + inner black card -------- */
+    const chartCanvasId = `fish-chart-${f.id.replace(/[^a-z0-9]/gi, "")}`;
+
+    // Inner card: solid black rectangle. The layered box-shadow is what
+    // makes the black "radiate out to outside the rectangle" and fade to
+    // transparent. 0.98/0.6/0.35/0.15 alphas layer a progressive fade.
+    chartDiv.html(`
+      <div
+        id="fish-chart-inner"
+        style="
+          position: relative;
+          font-family: var(--font-sans);
+          background: rgba(0, 0, 0, 0.98);
+          border-radius: 12px;
+          padding: 10px;
+          box-shadow:
+            0 0 18px 6px rgba(0, 0, 0, 0.98),
+            0 0 42px 14px rgba(0, 0, 0, 0.55),
+            0 0 80px 24px rgba(0, 0, 0, 0.22);
+        "
+      >
+         <h2 style="margin:0 0 8px 0;color:#7fd4ff;font-size:17px;">Sightings — ${f.species}</h2>
+        <div style="position:relative;width:100%;height:220px;">
+          <canvas id="${chartCanvasId}"></canvas>
+        </div>
+      </div>
+ 
+    `);
+    chartDiv.show();
+    positionChartDiv();
+    wireCloseButton();
+
+    /* ---------- 3. Chart.js setup ------------------------------------- */
     const canvas = document.getElementById(
       chartCanvasId,
     ) as HTMLCanvasElement | null;
     const ChartCtor = (window as any).Chart;
+    ChartCtor.defaults.font.family = "var(--font-sans)";
     if (!canvas) return;
 
     if (!ChartCtor) {
-      if (canvas.parentElement) {
-        canvas.parentElement.innerHTML =
-          '<div style="color:#666;font-size:11px;text-align:center;padding:16px 0;">' +
-          "Chart unavailable</div>";
-      }
+      showChartMessage("Chart unavailable");
       return;
     }
 
     const hist = f.populationHistory;
     if (hist.length === 0) {
-      canvas.parentElement!.innerHTML =
-        '<div style="color:#666;font-size:11px;text-align:center;padding:16px 0;">' +
-        "No population data available</div>";
+      showChartMessage("No population data available");
       return;
     }
 
@@ -709,10 +770,21 @@ export function sketch(p: p5): void {
     const counts = hist.map((d) => d.count);
     const last = hist.length - 1;
 
+    // Ratio helpers used by both the highlight styles and the fish opacity.
+    const minC = Math.min(...counts);
+    const maxC = Math.max(...counts);
+    const range = maxC - minC || 1;
+    const ratioFor = (idx: number) => (counts[idx] - minC) / range;
+    const ratioToOpacity = (r: number) =>
+      0.15 + 0.85 * Math.max(0, Math.min(1, r));
+
+    // Seed the fish opacity from the initially-highlighted (last) point.
+    selectedOpacity = ratioToOpacity(ratioFor(last));
+
     const pointStyles = (idx: number) => ({
       pointRadius: counts.map((_, i) => (i === idx ? 6 : 2.5)),
       pointBackgroundColor: counts.map((_, i) =>
-        i === idx ? "#7fd4ff" : "#4a7a99",
+        i === idx ? "##8aa" : "#4a7a99",
       ),
       pointBorderColor: counts.map((_, i) =>
         i === idx ? "#ffffff" : "rgba(0,0,0,0)",
@@ -720,52 +792,184 @@ export function sketch(p: p5): void {
       pointBorderWidth: counts.map((_, i) => (i === idx ? 2 : 0)),
     });
 
+    const initial = pointStyles(last);
+    let highlighted = last;
+    let dragging = false;
+
+    /* ---------- plugin: baseline line, current line, %change --- */
+    const scrubberDeltaPlugin = {
+      id: "scrubberDelta",
+      afterDatasetsDraw(chart: any) {
+        const idx = highlighted;
+        if (idx < 0 || idx >= counts.length) return;
+
+        const { ctx, chartArea, scales } = chart;
+        if (!ctx || !chartArea) return;
+
+        const yFirstRaw = scales.y.getPixelForValue(counts[0]);
+        const yCurRaw = scales.y.getPixelForValue(counts[idx]);
+        if (!isFinite(yFirstRaw) || !isFinite(yCurRaw)) return;
+
+        const clampY = (v: number) =>
+          Math.max(chartArea.top, Math.min(chartArea.bottom, v));
+        const yFirst = clampY(yFirstRaw);
+        const yCur = clampY(yCurRaw);
+
+        const base = counts[0];
+        const diff = counts[idx] - base;
+        const up = diff >= 0;
+        const accent = up ? "#4ade80" : "#f87171";
+        const accentSoft = up
+          ? "rgba(74, 222, 128, 0.85)"
+          : "rgba(248, 113, 113, 0.85)";
+
+        ctx.save();
+
+        /* 1. dashed reference line at the FIRST point's value */
+        ctx.beginPath();
+        ctx.setLineDash([6, 4]);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = "rgba(127, 212, 255, 0.55)";
+        ctx.moveTo(chartArea.left, yFirst);
+        ctx.lineTo(chartArea.right, yFirst);
+        ctx.stroke();
+
+        /* 2. solid line at the CURRENT (highlighted) point's value */
+        ctx.beginPath();
+        ctx.setLineDash([]);
+        ctx.lineWidth = 1.4;
+        ctx.strokeStyle = accentSoft;
+        ctx.moveTo(chartArea.left, yCur);
+        ctx.lineTo(chartArea.right, yCur);
+        ctx.stroke();
+
+        /* 3. badge — centered horizontally on the highlighted point,
+              floating just above that point's marker */
+        let text: string;
+        if (base === 0) {
+          text = diff === 0 ? "▲ 0.0%" : `${up ? "▲" : "▼"} —`;
+        } else {
+          const pct = (diff / base) * 100;
+          text = `${up ? "▲" : "▼"} ${Math.abs(pct).toFixed(1)}%`;
+        }
+
+        const fontSize = 12;
+        ctx.font = `600 ${fontSize}px Poppins, ui-sans-serif, system-ui, sans-serif`;
+        const padX = 8;
+        const padY = 5;
+        const textW = ctx.measureText(text).width;
+        const boxW = Math.ceil(textW + padX * 2);
+        const boxH = fontSize + padY * 2;
+
+        // X: centred on the highlighted data point.
+        let xCur: number;
+        try {
+          xCur = scales.x.getPixelForValue(idx);
+        } catch {
+          const sc = scales.x;
+          xCur = sc.left + ((idx + 0.5) / labels.length) * sc.width;
+        }
+
+        // Clamp so the badge can't slide outside the plot at the edges.
+        const boxX = Math.max(
+          chartArea.left + 2,
+          Math.min(chartArea.right - boxW - 2, xCur - boxW / 2),
+        );
+
+        // gap between label and point
+        const markerGap = 14;
+
+        // Clamp to the canvas (so the badge may float into the reserved
+        // top padding) instead of chartArea.top, which used to shove the
+        // badge downwards whenever the point was near the top.
+        const boxY = Math.max(
+          2,
+          Math.min(chart.height - boxH - 2, yCur - boxH - markerGap),
+        );
+        console.log(boxY);
+        roundRectPath(ctx, boxX, boxY, boxW, boxH, 6);
+        ctx.fillStyle = up
+          ? "rgba(12, 46, 26, 0.95)"
+          : "rgba(56, 16, 16, 0.95)";
+        ctx.fill();
+        ctx.strokeStyle = accentSoft;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.fillStyle = accent;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(text, boxX + padX, boxY + boxH / 2 + 0.5);
+
+        ctx.restore();
+      },
+    };
+
+    function roundRectPath(
+      ctx: CanvasRenderingContext2D,
+      x: number,
+      y: number,
+      w: number,
+      h: number,
+      r: number,
+    ): void {
+      const rr = Math.min(r, w / 2, h / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + rr, y);
+      ctx.arcTo(x + w, y, x + w, y + h, rr);
+      ctx.arcTo(x + w, y + h, x, y + h, rr);
+      ctx.arcTo(x, y + h, x, y, rr);
+      ctx.arcTo(x, y, x + w, y, rr);
+      ctx.closePath();
+    }
+
     currentChart = new ChartCtor(canvas, {
       type: "line",
+      plugins: [scrubberDeltaPlugin],
       data: {
         labels,
         datasets: [
           {
+            label: "Sightings",
             data: counts,
-            borderColor: "#7fd4ff",
-            backgroundColor: "rgba(127,212,255,0.15)",
-            fill: true,
-            tension: 0.4,
+            borderColor: "#4a7a99",
+            backgroundColor: "rgba(127, 212, 255, 0.12)",
             borderWidth: 2,
-            ...pointStyles(last),
+            fill: true,
+            tension: 0.3,
+            pointRadius: initial.pointRadius,
+            pointBackgroundColor: initial.pointBackgroundColor,
+            pointBorderColor: initial.pointBorderColor,
+            pointBorderWidth: initial.pointBorderWidth,
           },
         ],
       },
       options: {
-        responsive: false,
+        responsive: true,
+        maintainAspectRatio: false, // required: the wrapper div is a fixed 160px
         animation: false,
+        events: [], // we handle input ourselves; avoids hover/tooltip conflicts
+        font: { family: "'Poppins', sans-serif" },
+        layout: {
+          padding: { top: 34 },
+        },
         plugins: {
           legend: { display: false },
-          tooltip: { enabled: true },
+          tooltip: { enabled: false },
         },
         scales: {
           x: {
-            ticks: { color: "#779", font: { size: 9 }, maxRotation: 0 },
-            grid: { color: "rgba(127,212,255,0.06)" },
+            ticks: { color: "#7a8a99", maxRotation: 0, autoSkip: true },
+            grid: { color: "rgba(255,255,255,0.05)" },
           },
           y: {
-            beginAtZero: true,
-            ticks: { color: "#779", font: { size: 9 } },
-            grid: { color: "rgba(127,212,255,0.06)" },
+            ticks: { display: false },
           },
         },
       },
     });
 
     /* ------------------ draggable chart (highlight scrubber) ----------- */
-    let highlighted = last;
-    let dragging = false;
-
-    const logPoint = (idx: number) => {
-      // eslint-disable-next-line no-console
-      console.log(`[aquarium] ${f.species} — ${labels[idx]}: ${counts[idx]}`);
-    };
-
     const applyHighlight = (idx: number, doLog: boolean) => {
       if (!currentChart) return;
       highlighted = idx;
@@ -776,7 +980,17 @@ export function sketch(p: p5): void {
       ds.pointBorderColor = s.pointBorderColor;
       ds.pointBorderWidth = s.pointBorderWidth;
       currentChart.update("none");
-      if (doLog) logPoint(idx);
+
+      // Feed the scrubber back into the fish's opacity.
+      selectedOpacity = ratioToOpacity(ratioFor(idx));
+
+      if (doLog) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[aquarium] ${f.species} — ${labels[idx]}: ${counts[idx]} ` +
+            `(opacity ${selectedOpacity.toFixed(2)})`,
+        );
+      }
     };
 
     const nearestIndex = (ev: MouseEvent | TouchEvent): number => {
@@ -857,9 +1071,44 @@ export function sketch(p: p5): void {
     };
   }
 
+  function wireCloseButton(): void {
+    const closer = chartDiv.elt.querySelector(
+      "[data-close-btn]",
+    ) as HTMLElement | null;
+    if (!closer) return;
+    closer.addEventListener("mousedown", (e) => {
+      e.stopPropagation();
+      deselect();
+    });
+  }
+
+  function showChartMessage(msg: string): void {
+    chartDiv.html(`
+      <div style="
+        position:relative;
+        background:rgba(0,0,0,0.98);
+        border-radius:12px;
+        padding:10px 14px;
+        box-shadow:
+          0 0 18px 6px rgba(0,0,0,0.98),
+          0 0 42px 14px rgba(0,0,0,0.55),
+          0 0 80px 24px rgba(0,0,0,0.22);
+      ">
+        <div style="font-size:11px;color:#8aa;margin:0 0 6px 4px;letter-spacing:0.5px;">
+          <strong>Sightings — ${selectedFish?.species ?? ""}</strong>
+        </div>
+        <div style="color:#666;font-size:11px;text-align:center;padding:48px 0;">
+          ${msg}
+        </div>
+      </div>
+    `);
+    positionChartDiv();
+    wireCloseButton();
+  }
+
+  /** Pin the callout above the fish (never below). */
   function updateCalloutPosition(): void {
     if (!selectedFish) return;
-
     const sp = common.projectToScreen(
       camState,
       frontView,
@@ -868,30 +1117,42 @@ export function sketch(p: p5): void {
       selectedFish.pos.y,
       selectedFish.pos.z,
     );
-
     const rect = calloutDiv.elt.getBoundingClientRect();
     const margin = 16;
 
     let cx = sp.x - rect.width / 2;
     let cy = sp.y - selectedFish.size * 0.5 - rect.height - 24;
 
-    if (cy < margin) {
-      cy = sp.y + selectedFish.size * 0.5 + 24;
-    }
-
     if (cx < margin) cx = margin;
     if (cx + rect.width > p.width - margin) cx = p.width - rect.width - margin;
-    if (cy + rect.height > p.height - margin)
-      cy = p.height - rect.height - margin;
     if (cy < margin) cy = margin;
 
     calloutDiv.position(cx, cy);
   }
 
+  /**
+   * Bottom-centre, full-width chart panel. Width is `min(p.width - 80, 1400)`
+   * so the panel stretches to the screen but never gets absurdly wide on
+   * very large monitors. Sits 60px above the canvas floor.
+   */
+  function positionChartDiv(): void {
+    if (!chartDiv) return;
+    const w = Math.min(p.width - 80, 1400);
+    chartDiv.style("width", `${w}px`);
+
+    // Force layout so offsetHeight is accurate after the width change.
+    const el = chartDiv.elt as HTMLElement;
+    const h = el.offsetHeight || 260;
+
+    const x = Math.max(0, (p.width - w) / 2);
+    const y = Math.max(0, p.height - h - 60);
+    chartDiv.position(x, y);
+  }
+
   /* --------------------------- MOUSE / TOUCH ---------------------------- */
   p.mouseDragged = () => {
     if (!camState.dragging || frontView) return;
-    dragMoved = true; // [NEW] mark real drag for tap detection on release
+    dragMoved = true;
     camState.theta -= (p.mouseX - (p.pmouseX || p.mouseX)) * 0.006;
     camState.phi = p.constrain(
       camState.phi - (p.mouseY - (p.pmouseY || p.mouseY)) * 0.004,
@@ -904,9 +1165,6 @@ export function sketch(p: p5): void {
   p.mouseReleased = () => {
     const wasDragging = camState.dragging;
     camState.dragging = false;
-
-    // In drag mode, a *tap* (press+release with no movement) closes the
-    // callout. A real drag leaves the callout open.
     if (!selectMode && wasDragging && !dragMoved && selectedFish) {
       deselect();
     }
@@ -936,17 +1194,18 @@ export function sketch(p: p5): void {
   (p as any).touchEnded = () => p.mouseReleased!();
 
   /* ------------------------------ RESIZE ---------------------------------- */
-  p.windowResized = (): void => {
+  function handleResize(): void {
     const { w, h } = containerSize();
     p.resizeCanvas(w, h);
     p.perspective(p.PI / 3, w / h, 10, 7000);
-  };
+    if (chartDiv && chartDiv.elt.style.display !== "none") positionChartDiv();
+    if (calloutDiv && calloutDiv.elt.style.display !== "none") {
+      updateCalloutPosition();
+    }
+  }
 
-  (p as any).resizeToContainer = () => {
-    const { w, h } = containerSize();
-    p.resizeCanvas(w, h);
-    p.perspective(p.PI / 3, w / h, 10, 7000);
-  };
+  p.windowResized = handleResize;
+  (p as any).resizeToContainer = handleResize;
 
   (p as any).customCleanup = customCleanup;
 }
