@@ -106,7 +106,7 @@ export function createCommon(p: p5) {
       const vw = vh * (p.width / p.height);
       return {
         x: (wx / vw + 0.5) * p.width,
-        y: (0.5 - wy / vh) * p.height,
+        y: (0.5 + wy / vh) * p.height,
       };
     }
     const ex = cam.x,
@@ -149,8 +149,9 @@ export function createCommon(p: p5) {
     const ndcY = (f * cy) / cz;
 
     return {
+      // orbit view
       x: (ndcX + 1) * 0.5 * p.width,
-      y: (1 - ndcY) * 0.5 * p.height,
+      y: (1 + ndcY) * 0.5 * p.height,
     };
   }
 
@@ -621,6 +622,7 @@ export function createCommon(p: p5) {
     frontView: boolean,
     t: number,
     isHighlighted: boolean = false,
+    opacity: number = 1, // reused, now drives the ALPHA channel
   ): void {
     p.push();
     p.translate(f.pos.x, f.pos.y, f.pos.z);
@@ -651,7 +653,10 @@ export function createCommon(p: p5) {
     p.noStroke();
     p.texture(f.img);
 
-    p.tint(180);
+    // Ambient brightness stays at 180 (unchanged look); the 4th argument
+    // is the alpha channel, so low counts make the fish see-through.
+    const alpha = Math.round(255 * Math.max(0, Math.min(1, opacity)));
+    p.tint(180, 180, 180, alpha);
 
     const gl = p.drawingContext as unknown as WebGL2RenderingContext;
     gl.depthMask(false);

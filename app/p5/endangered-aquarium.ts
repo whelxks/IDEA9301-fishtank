@@ -13,6 +13,7 @@ import {
   createCommon,
   isInsideCanvas,
 } from "./common-functions";
+import { createGlassDiv, glassUICss } from "../components/glass-ui";
 
 /* =========================================================================
    3D AQUARIUM — ENDANGERED FISH — p5.js (WEBGL) — TypeScript
@@ -250,11 +251,18 @@ export function sketch(p: p5): void {
     const parentNode = (p as any)._userNode as HTMLElement | undefined;
 
     // Callout: solid, pinned above the fish.
-    calloutDiv = createAbsoluteDiv({
+    calloutDiv = createGlassDiv(p, {
       parent: parentNode,
       id: "fish-callout",
       width: "320px",
-      background: "rgba(10, 34, 51, 0.95)",
+      overrides: {
+        background: "rgba(10, 20, 35, 0.5)",
+        boxShadow:
+          "0 8px 32px 0 rgba(0, 0, 0, 0.5), " +
+          "inset 0 0 0 1px rgba(255, 255, 255, 0.1), " +
+          "inset 2px 2px 4px rgba(255,255,255,0.15), " +
+          "0 0 20px rgba(60, 180, 255, 0.2)",
+      },
     });
 
     // Chart panel: outer shell is transparent with a radial glow; the inner
@@ -541,15 +549,42 @@ export function sketch(p: p5): void {
       common.drawSpotlightGlow(selectedFish, camState, frontView, glowImg);
 
       // 4. Spotlighted fish, opacity driven by the chart scrubber.
-      //    NOTE: if common.drawFish() calls noTint() internally, remove that
-      //    call or move the tint inside that function for this to take effect.
-      p.tint(255, Math.round(selectedOpacity * 255));
-      common.drawFish(selectedFish, camState, frontView, t, true);
+      common.drawFish(
+        selectedFish,
+        camState,
+        frontView,
+        t,
+        true,
+        selectedOpacity,
+      );
       p.noTint();
 
       // 5. Keep the callout hovering above the fish.
       updateCalloutPosition();
     }
+
+    // TODO: commment out after debug
+    // const f0 = fishes[0];
+    // if (f0) {
+    //   const s = common.projectToScreen(
+    //     camState,
+    //     frontView,
+    //     frontZoom,
+    //     f0.pos.x,
+    //     f0.pos.y,
+    //     f0.pos.z,
+    //   );
+    //   let dot = document.getElementById("dbg-dot");
+    //   if (!dot) {
+    //     dot = document.createElement("div");
+    //     dot.id = "dbg-dot";
+    //     dot.style.cssText =
+    //       "position:absolute;width:10px;height:10px;margin:-5px;border-radius:50%;background:red;pointer-events:none;z-index:2000";
+    //     ((p as any)._userNode as HTMLElement).appendChild(dot);
+    //   }
+    //   dot.style.left = s.x + "px";
+    //   dot.style.top = s.y + "px";
+    // }
   };
 
   /* ------------------------------ FISH MOTION ---------------------------- */
@@ -584,7 +619,16 @@ export function sketch(p: p5): void {
   }
 
   /* ---------------------- HIT-TEST HELPERS ------------------------------- */
-  function projectedScreenRadius(f: EndangeredFish): number {
+  /**
+   * Projected half-extents of the fish's actual sprite rectangle, in screen
+   * pixels. Uses the same yaw/pitch math as drawFish so the returned box
+   * matches what's actually painted (roughly f.size wide × f.size*0.5 tall,
+   * not a fat circle).
+   */
+  function projectedScreenExtents(f: EndangeredFish): {
+    rx: number;
+    ry: number;
+  } {
     const center = common.projectToScreen(
       camState,
       frontView,
@@ -593,40 +637,87 @@ export function sketch(p: p5): void {
       f.pos.y,
       f.pos.z,
     );
-    if (!center || !isFinite(center.x) || !isFinite(center.y)) return 0;
+    if (!center || !isFinite(center.x) || !isFinite(center.y)) {
+      return { rx: 0, ry: 0 };
+    }
 
-    const half = f.size * 0.5;
-    let maxD = 0;
-    for (const [ox, oy, oz] of [
-      [half, 0, 0],
-      [0, half, 0],
-      [0, 0, half],
+    // Matches drawFish: plane is 2×1, scaled by (size*0.5, size*0.5*sy).
+    const halfW = f.size * 0.5;
+    const halfH = f.size * 0.25;
+    const sy = 1.05; // max fin-flap
+
+    let vx: number, vy: number, vz: number;
+    if (frontView) {
+      vx = -camState.x;
+      vy = -camState.y;
+      vz = -camState.z;
+    } else {
+      vx = camState.x - f.pos.x;
+      vy = camState.y - f.pos.y;
+      vz = camState.z - f.pos.z;
+    }
+    const yaw = Math.atan2(vx, vz);
+    const pitch = -Math.atan2(vy, Math.sqrt(vx * vx + vz * vz));
+    const cy = Math.cos(yaw),
+      syw = Math.sin(yaw);
+    const cp = Math.cos(pitch),
+      spp = Math.sin(pitch);
+
+    // Local (lx, ly, 0) → world offset (rotateY then rotateX, matching p5).
+    const localToWorld = (lx: number, ly: number): [number, number, number] => {
+      const x1 = lx * cy;
+      const y1 = ly;
+      const z1 = -lx * syw;
+      const x2 = x1;
+      const y2 = y1 * cp - z1 * spp;
+      const z2 = y1 * spp + z1 * cp;
+      return [x2, y2, z2];
+    };
+
+    let minX = center.x,
+      maxX = center.x;
+    let minY = center.y,
+      maxY = center.y;
+    for (const [lx, ly] of [
+      [halfW, halfH * sy],
+      [halfW, -halfH * sy],
+      [-halfW, halfH * sy],
+      [-halfW, -halfH * sy],
     ] as const) {
+      const [wx, wy, wz] = localToWorld(lx, ly);
       const s = common.projectToScreen(
         camState,
         frontView,
         frontZoom,
-        f.pos.x + ox,
-        f.pos.y + oy,
-        f.pos.z + oz,
+        f.pos.x + wx,
+        f.pos.y + wy,
+        f.pos.z + wz,
       );
       if (!s || !isFinite(s.x) || !isFinite(s.y)) continue;
-      const d = Math.hypot(s.x - center.x, s.y - center.y);
-      if (d > maxD) maxD = d;
+      if (s.x < minX) minX = s.x;
+      if (s.x > maxX) maxX = s.x;
+      if (s.y < minY) minY = s.y;
+      if (s.y > maxY) maxY = s.y;
     }
-    return Math.max(maxD * 1.5, 30);
+
+    // Floor for far / small fish so they don't become impossible to click.
+    return {
+      rx: Math.max((maxX - minX) / 2, 14),
+      ry: Math.max((maxY - minY) / 2, 12),
+    };
   }
 
-  function isOverOverlay(): boolean {
-    const canvasEl = (p as any).canvas as HTMLCanvasElement | undefined;
-    if (!canvasEl) return false;
-    const cr = canvasEl.getBoundingClientRect();
-    const cx = cr.left + p.mouseX;
-    const cy = cr.top + p.mouseY;
+  function pressIsOnPanel(): boolean {
+    const cvs = (p as any)._renderer?.elt as HTMLCanvasElement | undefined;
+    if (!cvs) return false;
+    const r = cvs.getBoundingClientRect();
+    const cx = r.left + p.mouseX;
+    const cy = r.top + p.mouseY;
+
     for (const d of [calloutDiv, chartDiv]) {
       if (!d || d.elt.style.display === "none") continue;
-      const r = d.elt.getBoundingClientRect();
-      if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) {
+      const b = (d.elt as HTMLElement).getBoundingClientRect();
+      if (cx >= b.left && cx <= b.right && cy >= b.top && cy <= b.bottom) {
         return true;
       }
     }
@@ -635,14 +726,23 @@ export function sketch(p: p5): void {
 
   /* ------------------------------ INPUT ----------------------------------- */
   p.mousePressed = () => {
-    if (isOverOverlay()) return;
+    if (pressIsOnPanel()) return; // clicks on callout / chart never select or close
+
     if (!isInsideCanvas(p)) {
       if (selectedFish) deselect();
       return;
     }
 
     if (selectMode) {
-      type Info = { fish: EndangeredFish; d: number; r: number; score: number };
+      type Info = {
+        fish: EndangeredFish;
+        screenX: number;
+        screenY: number;
+        rx: number;
+        ry: number;
+        depthSq: number; // squared distance from camera — smaller = nearer = on top
+      };
+
       const infos: Info[] = [];
       for (const f of fishes) {
         const sp = common.projectToScreen(
@@ -654,23 +754,49 @@ export function sketch(p: p5): void {
           f.pos.z,
         );
         if (!sp || !isFinite(sp.x) || !isFinite(sp.y)) continue;
-        const r = projectedScreenRadius(f);
-        if (r <= 0) continue;
-        const d = p.dist(p.mouseX, p.mouseY, sp.x, sp.y);
-        infos.push({ fish: f, d, r, score: d / r });
+        const { rx, ry } = projectedScreenExtents(f);
+        if (rx <= 0 || ry <= 0) continue;
+        const depthSq =
+          (camState.x - f.pos.x) ** 2 +
+          (camState.y - f.pos.y) ** 2 +
+          (camState.z - f.pos.z) ** 2;
+        infos.push({ fish: f, screenX: sp.x, screenY: sp.y, rx, ry, depthSq });
       }
 
+      // Pass 1: click inside the fish's projected rectangle (with a small pad).
+      const PAD = 8;
       const inside = infos
-        .filter((i) => i.score <= 1)
-        .sort((a, b) => a.score - b.score || b.r - a.r);
+        .filter(
+          (i) =>
+            Math.abs(p.mouseX - i.screenX) <= i.rx + PAD &&
+            Math.abs(p.mouseY - i.screenY) <= i.ry + PAD,
+        )
+        .sort((a, b) => {
+          // Front fish wins on overlap; tie-break by how centred the click is.
+          if (a.depthSq !== b.depthSq) return a.depthSq - b.depthSq;
+          const da =
+            Math.abs(p.mouseX - a.screenX) / a.rx +
+            Math.abs(p.mouseY - a.screenY) / a.ry;
+          const db =
+            Math.abs(p.mouseX - b.screenX) / b.rx +
+            Math.abs(p.mouseY - b.screenY) / b.ry;
+          return da - db;
+        });
+
       let clickedFish: EndangeredFish | null = inside[0]?.fish ?? null;
 
+      // Pass 2: nearest fish within a tight pixel gap (was 45px, now 18px).
       if (!clickedFish) {
-        const nearest = infos
-          .map((i) => ({ ...i, gap: i.d - i.r }))
-          .filter((i) => i.gap <= 45)
-          .sort((a, b) => a.gap - b.gap)[0];
-        if (nearest) clickedFish = nearest.fish;
+        const FALLBACK_PX = 18;
+        const nearby = infos
+          .map((i) => {
+            const dx = Math.max(0, Math.abs(p.mouseX - i.screenX) - i.rx);
+            const dy = Math.max(0, Math.abs(p.mouseY - i.screenY) - i.ry);
+            return { ...i, gap: Math.hypot(dx, dy) };
+          })
+          .filter((i) => i.gap <= FALLBACK_PX)
+          .sort((a, b) => a.gap - b.gap || a.depthSq - b.depthSq);
+        clickedFish = nearby[0]?.fish ?? null;
       }
 
       if (clickedFish) {
@@ -696,19 +822,28 @@ export function sketch(p: p5): void {
 
     /* ---------- 1. Callout: name + fun fact (above the fish) ---------- */
     calloutDiv.html(`
-      <h2 style="margin:0 0 8px 0;color:#7fd4ff;font-size:17px;">${f.species}</h2>
-      <p style="margin:0 0 8px 0;font-size:12px;line-height:1.45;color:#cfd;">
+      <h2 style="margin:0 0 8px 0;color:#7fd4ff;font-size:17px;text-shadow: 0 0 10px rgba(127, 212, 255, 0.5);">
+        ${f.species}
+      </h2>
+      
+      <p style="margin:0 0 8px 0;font-size:12px;line-height:1.45;color:#cfd;text-shadow: 0 1px 3px rgba(0,0,0,0.8);">
         <strong>Fun Fact:</strong> ${f.funFact}
       </p>
-      <p style="margin:0;font-size:12px;line-height:1.45;color:#cfd;">
+      
+      <p style="margin:0;font-size:12px;line-height:1.45;color:#cfd;text-shadow: 0 1px 3px rgba(0,0,0,0.8);">
         <strong>Why should you care:</strong> ${f.funFact}
       </p>
-           <div
+      
+      <div
         data-close-btn="1"
         style="
           margin-top:12px;font-size:11px;color:#7a8a99;
           text-align:center;cursor:pointer;
+          text-shadow: 0 0 8px rgba(122, 138, 153, 0.5);
+          transition: color 0.2s, text-shadow 0.2s;
         "
+        onmouseover="this.style.color='#7fd4ff'; this.style.textShadow='0 0 10px rgba(127,212,255,0.8)';"
+        onmouseout="this.style.color='#7a8a99'; this.style.textShadow='0 0 8px rgba(122,138,153,0.5)';"
       >Click outside to close</div>
     `);
     calloutDiv.show();
@@ -717,30 +852,21 @@ export function sketch(p: p5): void {
     /* ---------- 2. Chart panel: outer shell + inner black card -------- */
     const chartCanvasId = `fish-chart-${f.id.replace(/[^a-z0-9]/gi, "")}`;
 
-    // Inner card: solid black rectangle. The layered box-shadow is what
-    // makes the black "radiate out to outside the rectangle" and fade to
-    // transparent. 0.98/0.6/0.35/0.15 alphas layer a progressive fade.
     chartDiv.html(`
       <div
         id="fish-chart-inner"
         style="
           position: relative;
           font-family: var(--font-sans);
-          background: rgba(0, 0, 0, 0.98);
-          border-radius: 12px;
-          padding: 10px;
-          box-shadow:
-            0 0 18px 6px rgba(0, 0, 0, 0.98),
-            0 0 42px 14px rgba(0, 0, 0, 0.55),
-            0 0 80px 24px rgba(0, 0, 0, 0.22);
+          padding: 16px;
+          ${glassUICss()}
         "
       >
-         <h2 style="margin:0 0 8px 0;color:#7fd4ff;font-size:17px;">Sightings — ${f.species}</h2>
+        <h2 style="margin:0 0 8px 0;color:#7fd4ff;font-size:17px;text-shadow: 0 0 10px rgba(127, 212, 255, 0.5);">Sightings — ${f.species}</h2>
         <div style="position:relative;width:100%;height:220px;">
           <canvas id="${chartCanvasId}"></canvas>
         </div>
       </div>
- 
     `);
     chartDiv.show();
     positionChartDiv();
@@ -1070,36 +1196,44 @@ export function sketch(p: p5): void {
   }
 
   function wireCloseButton(): void {
-    const closer = chartDiv.elt.querySelector(
+    // 1. Chart close button
+    const chartCloser = chartDiv.elt.querySelector(
       "[data-close-btn]",
     ) as HTMLElement | null;
-    if (!closer) return;
-    closer.addEventListener("mousedown", (e) => {
-      e.stopPropagation();
-      deselect();
-    });
+    if (chartCloser) {
+      chartCloser.addEventListener("mousedown", (e) => {
+        e.stopPropagation();
+        deselect();
+      });
+    }
+
+    // 2. Callout close button
+    const calloutCloser = calloutDiv.elt.querySelector(
+      "[data-close-btn]",
+    ) as HTMLElement | null;
+    if (calloutCloser) {
+      calloutCloser.addEventListener("mousedown", (e) => {
+        e.stopPropagation();
+        deselect();
+      });
+    }
   }
 
   function showChartMessage(msg: string): void {
     chartDiv.html(`
-      <div style="
-        position:relative;
-        background:rgba(0,0,0,0.98);
-        border-radius:12px;
-        padding:10px 14px;
-        box-shadow:
-          0 0 18px 6px rgba(0,0,0,0.98),
-          0 0 42px 14px rgba(0,0,0,0.55),
-          0 0 80px 24px rgba(0,0,0,0.22);
-      ">
-        <div style="font-size:11px;color:#8aa;margin:0 0 6px 4px;letter-spacing:0.5px;">
-          <strong>Sightings — ${selectedFish?.species ?? ""}</strong>
-        </div>
-        <div style="color:#666;font-size:11px;text-align:center;padding:48px 0;">
-          ${msg}
-        </div>
-      </div>
-    `);
+  <div style="
+    position: relative;
+    padding: 16px;
+    ${glassUICss()}
+  ">
+    <div style="font-size:11px;color:#7fd4ff;margin:0 0 6px 4px;letter-spacing:0.5px;text-shadow: 0 0 8px rgba(127, 212, 255, 0.4);">
+      <strong>Sightings — ${selectedFish?.species ?? ""}</strong>
+    </div>
+    <div style="color:#8899aa;font-size:12px;text-align:center;padding:48px 0;">
+      ${msg}
+    </div>
+  </div>
+`);
     positionChartDiv();
     wireCloseButton();
   }
