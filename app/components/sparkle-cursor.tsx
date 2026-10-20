@@ -1,125 +1,253 @@
 import { useEffect, useRef } from "react";
 
+const POOL_SIZE = 90;
+const SPAWN_EVERY_PX = 14; // distance between spawns (distance-based, not event-based)
+
 type Particle = {
+  alive: boolean;
+  sparkle: boolean;
   x: number;
   y: number;
   vx: number;
   vy: number;
+  age: number;
   life: number;
   size: number;
+  phase: number;
 };
+
+/** Pre-render a sprite once; drawImage is far cheaper than redrawing paths. */
+function makeSprite(draw: (c: CanvasRenderingContext2D, s: number) => void) {
+  const s = 64;
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = s;
+  draw(cv.getContext("2d")!, s);
+  return cv;
+}
+
+const bubbleSprite = () =>
+  makeSprite((c, s) => {
+    const m = s / 2;
+    const g = c.createRadialGradient(m, m, s * 0.18, m, m, m - 2);
+    g.addColorStop(0, "rgba(170,230,255,0)");
+    g.addColorStop(1, "rgba(170,230,255,0.4)");
+    c.fillStyle = g;
+    c.beginPath();
+    c.arc(m, m, m - 2, 0, Math.PI * 2);
+    c.fill();
+    c.strokeStyle = "rgba(225,248,255,0.9)";
+    c.lineWidth = 2;
+    c.stroke();
+    c.fillStyle = "rgba(255,255,255,0.9)"; // highlight
+    c.beginPath();
+    c.ellipse(m - 11, m - 12, 7, 4.5, -0.6, 0, Math.PI * 2);
+    c.fill();
+  });
+
+const sparkleSprite = () =>
+  makeSprite((c, s) => {
+    const m = s / 2;
+    const glow = c.createRadialGradient(m, m, 0, m, m, m);
+    glow.addColorStop(0, "rgba(200,240,255,0.55)");
+    glow.addColorStop(1, "rgba(127,212,255,0)");
+    c.fillStyle = glow;
+    c.fillRect(0, 0, s, s);
+
+    c.fillStyle = "#ffffff"; // 4-point star
+    c.beginPath();
+    c.moveTo(m, 4);
+    c.quadraticCurveTo(m, m, s - 4, m);
+    c.quadraticCurveTo(m, m, m, s - 4);
+    c.quadraticCurveTo(m, m, 4, m);
+    c.quadraticCurveTo(m, m, m, 4);
+    c.fill();
+  });
 
 export function SparkleCursor() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const mouseRef = useRef({ x: -100, y: -100, isHovering: false });
-  const particlesRef = useRef<Particle[]>([]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    // Skip on touch devices and for users who prefer reduced motion.
+    if (
+      window.matchMedia("(pointer: coarse)").matches ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      return;
+    }
 
-    // 1. Handle resizing
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
+
+    const bubble = bubbleSprite();
+    const sparkle = sparkleSprite();
+
+    // Fixed pool: no allocations or splice() in the hot path.
+    const pool: Particle[] = Array.from({ length: POOL_SIZE }, () => ({
+      alive: false,
+      sparkle: false,
+      x: 0,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      age: 0,
+      life: 1,
+      size: 8,
+      phase: 0,
+    }));
+    let cursor = 0;
+
+    let W = 0,
+      H = 0;
     const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      W = window.innerWidth;
+      H = window.innerHeight;
+      canvas.width = W * dpr;
+      canvas.height = H * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
     resize();
-    window.addEventListener("resize", resize);
 
-    // 2. Track mouse position globally
-    const onMouseMove = (e: MouseEvent) => {
-      mouseRef.current.x = e.clientX;
-      mouseRef.current.y = e.clientY;
-      
-      // Spawn 1-2 sparkles per movement
-      for (let i = 0; i < 2; i++) {
-        particlesRef.current.push({
-          x: e.clientX + (Math.random() - 0.5) * 10,
-          y: e.clientY + (Math.random() - 0.5) * 10,
-          vx: (Math.random() - 0.5) * 1.5,
-          vy: (Math.random() - 0.5) * 1.5,
-          life: 1,
-          size: Math.random() * 3 + 1,
-        });
+    const mouse = {
+      x: -100,
+      y: -100,
+      lastX: -100,
+      lastY: -100,
+      visible: false,
+    };
+    let lastMove = 0;
+    let raf = 0;
+    let lastT = 0;
+    let acc = 0;
+
+    const spawn = (x: number, y: number) => {
+      const p = pool[cursor];
+      cursor = (cursor + 1) % POOL_SIZE;
+      const isSparkle = Math.random() < 0.4;
+      p.alive = true;
+      p.sparkle = isSparkle;
+      p.x = x + (Math.random() - 0.5) * 10;
+      p.y = y + (Math.random() - 0.5) * 10;
+      p.age = 0;
+      p.phase = Math.random() * Math.PI * 2;
+      if (isSparkle) {
+        p.vx = (Math.random() - 0.5) * 0.6;
+        p.vy = (Math.random() - 0.5) * 0.6;
+        p.life = 0.6 + Math.random() * 0.4;
+        p.size = 8 + Math.random() * 8;
+      } else {
+        p.vx = (Math.random() - 0.5) * 0.4;
+        p.vy = -(0.5 + Math.random() * 0.8); // bubbles drift upward
+        p.life = 0.9 + Math.random() * 0.7;
+        p.size = 5 + Math.random() * 8;
       }
     };
 
-    window.addEventListener("mousemove", onMouseMove);
+    const onMove = (e: PointerEvent) => {
+      const nx = e.clientX,
+        ny = e.clientY;
+      if (!mouse.visible) {
+        mouse.lastX = nx;
+        mouse.lastY = ny;
+        mouse.visible = true;
+      }
+      // Spawn along the path so fast swipes leave a continuous trail.
+      const dx = nx - mouse.lastX,
+        dy = ny - mouse.lastY;
+      const dist = Math.hypot(dx, dy);
+      acc += dist;
+      let spawned = 0;
+      while (acc >= SPAWN_EVERY_PX && spawned < 4) {
+        acc -= SPAWN_EVERY_PX;
+        const k = dist > 0 ? 1 - acc / dist : 1;
+        spawn(mouse.lastX + dx * k, mouse.lastY + dy * k);
+        spawned++;
+      }
+      if (acc > SPAWN_EVERY_PX) acc = 0;
 
-    // 3. Animation Loop
-    let animationFrameId: number;
-    let rotation = 0;
+      mouse.lastX = mouse.x = nx;
+      mouse.lastY = mouse.y = ny;
+      lastMove = performance.now();
+      if (!raf) {
+        lastT = lastMove;
+        raf = requestAnimationFrame(tick);
+      }
+    };
 
-    const render = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const onLeave = () => {
+      mouse.visible = false;
+      ctx.clearRect(0, 0, W, H);
+    };
 
-      // --- Draw the main cursor (Holographic Star) ---
-      const mx = mouseRef.current.x;
-      const my = mouseRef.current.y;
-      
-      if (mx > 0 && my > 0) {
+    const tick = (now: number) => {
+      const dt = Math.min((now - lastT) / 1000, 0.05);
+      lastT = now;
+      const step = dt * 60; // normalise to 60fps so 144Hz screens match
+
+      ctx.clearRect(0, 0, W, H);
+      ctx.globalCompositeOperation = "lighter"; // cheap glow, no shadowBlur
+
+      let alive = 0;
+      for (let i = 0; i < POOL_SIZE; i++) {
+        const p = pool[i];
+        if (!p.alive) continue;
+        p.age += dt;
+        const t = p.age / p.life;
+        if (t >= 1) {
+          p.alive = false;
+          continue;
+        }
+        alive++;
+
+        p.x += p.vx * step;
+        p.y += p.vy * step;
+
+        if (p.sparkle) {
+          // twinkle: grow then shrink, fade out
+          const s = p.size * Math.sin(Math.PI * t);
+          ctx.globalAlpha = 1 - t * 0.6;
+          ctx.drawImage(sparkle, p.x - s, p.y - s, s * 2, s * 2);
+        } else {
+          p.x += Math.sin(p.age * 5 + p.phase) * 0.35 * step; // wobble
+          const fadeIn = Math.min(1, t * 6);
+          ctx.globalAlpha = fadeIn * (1 - t) * 0.9;
+          const s = p.size * (0.8 + t * 0.4); // bubbles swell slightly
+          ctx.drawImage(bubble, p.x - s, p.y - s, s * 2, s * 2);
+        }
+      }
+
+      // Cursor head: a pulsing, slowly rotating star.
+      if (mouse.visible) {
+        const pulse = 13 + Math.sin(now * 0.005) * 2.5;
         ctx.save();
-        ctx.translate(mx, my);
-        rotation += 0.02;
-        ctx.rotate(rotation);
-
-        // Glow effect
-        ctx.shadowColor = "#7fd4ff";
-        ctx.shadowBlur = 12;
-
-        // Draw star cross
-        ctx.fillStyle = "rgba(127, 212, 255, 0.9)";
-        const size = 8 + Math.sin(Date.now() * 0.005) * 2;
-        
-        ctx.beginPath();
-        ctx.roundRect(-size, -1.5, size * 2, 3, 2); // Horizontal
-        ctx.roundRect(-1.5, -size, 3, size * 2, 2); // Vertical
-        ctx.fill();
-
-        // Central white dot
-        ctx.fillStyle = "#ffffff";
-        ctx.shadowBlur = 4;
-        ctx.beginPath();
-        ctx.arc(0, 0, 2, 0, Math.PI * 2);
-        ctx.fill();
-        
+        ctx.translate(mouse.x, mouse.y);
+        ctx.rotate(now * 0.0008);
+        ctx.globalAlpha = 0.95;
+        ctx.drawImage(sparkle, -pulse, -pulse, pulse * 2, pulse * 2);
         ctx.restore();
       }
 
-      // --- Update and Draw the trailing particles ---
-      ctx.shadowBlur = 8;
-      ctx.shadowColor = "#7fd4ff";
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
 
-      for (let i = particlesRef.current.length - 1; i >= 0; i--) {
-        const p = particlesRef.current[i];
-        
-        p.x += p.vx;
-        p.y += p.vy;
-        p.life -= 0.03; // Fade out speed
-        p.size *= 0.96; // Shrink
-
-        if (p.life <= 0) {
-          particlesRef.current.splice(i, 1);
-          continue;
-        }
-
-        ctx.fillStyle = `rgba(127, 212, 255, ${p.life * 0.8})`;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-        ctx.fill();
+      // Idle: stop the loop entirely until the pointer moves again.
+      if (alive > 0 || now - lastMove < 200) {
+        raf = requestAnimationFrame(tick);
+      } else {
+        raf = 0;
       }
-
-      animationFrameId = requestAnimationFrame(render);
     };
 
-    render();
+    window.addEventListener("pointermove", onMove, { passive: true });
+    window.addEventListener("resize", resize);
+    document.documentElement.addEventListener("mouseleave", onLeave);
 
     return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("pointermove", onMove);
       window.removeEventListener("resize", resize);
-      window.removeEventListener("mousemove", onMouseMove);
-      cancelAnimationFrame(animationFrameId);
+      document.documentElement.removeEventListener("mouseleave", onLeave);
     };
   }, []);
 
@@ -131,8 +259,8 @@ export function SparkleCursor() {
         inset: 0,
         width: "100vw",
         height: "100vh",
-        pointerEvents: "none", // Crucial: lets clicks pass through to React and p5
-        zIndex: 999999,        // Ensures it floats above everything
+        pointerEvents: "none",
+        zIndex: 999999,
       }}
     />
   );
