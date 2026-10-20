@@ -1,5 +1,5 @@
 // app/lib/supabase.ts
-import { createClient, RealtimeChannel } from "@supabase/supabase-js";
+import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -20,6 +20,7 @@ export type EndangeredFishRow ={
   species: string;
   population_history: { count: number; month: string }[];
   fun_fact: string;
+  why_care: string;
 }
 
 /* ------------------------------ history_of_endangered_fish ---------------------------------- */

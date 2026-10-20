@@ -2,8 +2,9 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Poppins", ui-sans-serif, system-ui, sans-serif,
-    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --font-sans:
+    "Poppins", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
 }
 
 @font-face {
@@ -20,5 +21,15 @@ body {
 
   @media (prefers-color-scheme: dark) {
     color-scheme: dark;
+  }
+
+  cursor: none; /* Hides the default arrow globally */
+
+  /* Optional: Bring the cursor back for specific UI elements 
+   if you don't want the sparkle over text inputs, etc. */
+  input,
+  textarea,
+  select {
+    cursor: auto;
   }
 }

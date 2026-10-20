@@ -43,6 +43,29 @@ export const HOLO_GLASS_OVERRIDES: GlassUIOverrides = {
     "inset 0 0 0 1px rgba(255, 255, 255, 0.18)",
 };
 
+/* Chart-panel variant of the holographic glass.
+   Keeps the iridescent border + neon glow from HOLO_GLASS_OVERRIDES, but
+   darkens the fill to a frosted base (like GLASS_UI_CSS) so the chart
+   canvas stays readable. */
+export const MUTED_HOLO_GLASS_OVERRIDES: GlassUIOverrides = {
+  // Low-alpha iridescent gradient over a dark frosted base.
+  // The colour in the final layer is the background-color; the gradient
+  // paints on top, and because its stops are mostly-transparent the dark
+  // base shows through — muted shimmer, not a bright wash.
+  background:
+    "linear-gradient(120deg, " +
+    "rgba(0, 205, 255, 0.10) 0%, " +
+    "rgba(120, 90, 255, 0.09) 38%, " +
+    "rgba(255, 80, 200, 0.08) 66%, " +
+    "rgba(0, 205, 255, 0.10) 100%), " +
+    "rgba(10, 20, 35, 0.65)", // raise 0.65 if you want more legiblte text
+  border: HOLO_GLASS_OVERRIDES.border,
+  boxShadow: HOLO_GLASS_OVERRIDES.boxShadow,
+  // Extra frost over the p5 scene behind the card.
+  backdropFilter: "blur(20px)",
+  WebkitBackdropFilter: "blur(20px)",
+};
+
 function kebabCase(camel: string): string {
   return camel.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase());
 }

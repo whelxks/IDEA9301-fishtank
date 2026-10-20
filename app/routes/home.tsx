@@ -1,7 +1,7 @@
 import type { Route } from "./+types/home";
 import React, { useCallback, useRef, useState } from "react";
 import Aquarium from "./aquarium/aquarium";
-import { PaneLabel } from "~/components/text";
+import { PaneLabel } from "~/components/panel-text";
 import EndangeredAquarium from "./endangered-aquarium/endangered-aquarium";
 
 export function meta({}: Route.MetaArgs) {
@@ -101,7 +101,7 @@ export default function Home() {
             <EndangeredAquarium />
           </div>
           <PaneLabel
-            text="fishes in the past year"
+            text="fishes from the past"
             left="0%"
             width={`${pct}%`}
             color="#ffffff"

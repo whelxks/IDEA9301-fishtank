@@ -390,9 +390,15 @@ export function sketch(p: p5): void {
       card.name.title =
         `${s.name}: ${s.count} in tank ` +
         `(latest reading ${TARGET_PER_SPECIES})`;
-      card.pct.textContent = `-${Math.round(s.pct)}%`;
-      card.pct.style.color = "#ff9d7a";
-      card.pct.style.textShadow = "0 0 14px rgba(255, 130, 90, 0.6)";
+
+      // Mirror the chart's change indicator: arrow + magnitude.
+      // A deficit is always "below target" here, so it's always ▼.
+      const down = s.deficit > 0;
+      card.pct.textContent = `${down ? "▼" : "▲"} ${Math.round(s.pct)}%`;
+      card.pct.style.color = down ? "#ff9d7a" : "#4ade80";
+      card.pct.style.textShadow = down
+        ? "0 0 14px rgba(255, 130, 90, 0.6)"
+        : "0 0 14px rgba(74, 222, 128, 0.6)";
       // Side label clarifying what the % is measuring.
       card.pctSub.textContent = "vs. latest population reading";
     }

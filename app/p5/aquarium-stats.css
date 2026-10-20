@@ -73,7 +73,7 @@
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 6px;
   row-gap: 0;
 }
 .aq-pct {
@@ -166,6 +166,7 @@
   border: 1px solid rgba(150, 235, 255, 0.75);
   background: rgba(80, 200, 255, 0.15);
   color: #cdeeff;
+  
   display: inline-flex;
   align-items: center;
   justify-content: center;

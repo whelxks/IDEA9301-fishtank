@@ -7,6 +7,7 @@ import {
   ScrollRestoration,
 } from "react-router";
 import type { Route } from "./+types/root";
+import { SparkleCursor } from "~/components/sparkle-cursor";
 import "./app.css";
 
 export const links: Route.LinksFunction = () => [
@@ -36,6 +37,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         {children}
+          <SparkleCursor />
         <ScrollRestoration />
         <Scripts />
       </body>

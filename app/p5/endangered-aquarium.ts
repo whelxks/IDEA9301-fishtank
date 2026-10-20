@@ -13,7 +13,11 @@ import {
   createCommon,
   isInsideCanvas,
 } from "./common-functions";
-import { createGlassDiv, glassUICss } from "../components/glass-ui";
+import {
+  createGlassDiv,
+  glassUICss,
+  MUTED_HOLO_GLASS_OVERRIDES,
+} from "../components/glass-ui";
 
 /* =========================================================================
    3D AQUARIUM — ENDANGERED FISH — p5.js (WEBGL) — TypeScript
@@ -39,6 +43,7 @@ interface EndangeredFish extends Fish {
   id: string;
   species: string;
   funFact: string;
+  whyCare: string;
   populationHistory: { count: number; month: string }[];
 }
 
@@ -227,6 +232,7 @@ export function sketch(p: p5): void {
       id: row ? String(row.id) : `fallback-${Math.random()}`,
       species: row?.species ?? "Data Pending",
       funFact: row?.fun_fact ?? "No information available for this entry.",
+      whyCare: row?.why_care ?? "No information available for this entry.",
       populationHistory: row?.population_history ?? [],
     };
   }
@@ -254,7 +260,7 @@ export function sketch(p: p5): void {
     calloutDiv = createGlassDiv(p, {
       parent: parentNode,
       id: "fish-callout",
-      width: "320px",
+      width: "360px",
       overrides: {
         background: "rgba(10, 20, 35, 0.5)",
         boxShadow:
@@ -826,12 +832,12 @@ export function sketch(p: p5): void {
         ${f.species}
       </h2>
       
-      <p style="margin:0 0 8px 0;font-size:12px;line-height:1.45;color:#cfd;text-shadow: 0 1px 3px rgba(0,0,0,0.8);">
+      <p style="margin:0 0 8px 0;font-size:12px;line-height:1.45;color:#ffffff;text-shadow: 0 1px 3px rgba(0,0,0,0.8);">
         <strong>Fun Fact:</strong> ${f.funFact}
       </p>
       
       <p style="margin:0;font-size:12px;line-height:1.45;color:#cfd;text-shadow: 0 1px 3px rgba(0,0,0,0.8);">
-        <strong>Why should you care:</strong> ${f.funFact}
+        <strong>Why should you care:</strong> ${f.whyCare}
       </p>
       
       <div
@@ -859,11 +865,11 @@ export function sketch(p: p5): void {
           position: relative;
           font-family: var(--font-sans);
           padding: 16px;
-          ${glassUICss()}
+          ${glassUICss(MUTED_HOLO_GLASS_OVERRIDES)}
         "
       >
         <h2 style="margin:0 0 8px 0;color:#7fd4ff;font-size:17px;text-shadow: 0 0 10px rgba(127, 212, 255, 0.5);">Sightings — ${f.species}</h2>
-        <div style="position:relative;width:100%;height:220px;">
+        <div style="position:relative;width:100%;height:300px;">
           <canvas id="${chartCanvasId}"></canvas>
         </div>
       </div>
@@ -1224,7 +1230,7 @@ export function sketch(p: p5): void {
   <div style="
     position: relative;
     padding: 16px;
-    ${glassUICss()}
+   ${glassUICss(MUTED_HOLO_GLASS_OVERRIDES)}
   ">
     <div style="font-size:11px;color:#7fd4ff;margin:0 0 6px 4px;letter-spacing:0.5px;text-shadow: 0 0 8px rgba(127, 212, 255, 0.4);">
       <strong>Sightings — ${selectedFish?.species ?? ""}</strong>
@@ -1277,7 +1283,9 @@ export function sketch(p: p5): void {
     const h = el.offsetHeight || 260;
 
     const x = Math.max(0, (p.width - w) / 2);
-    const y = Math.max(0, p.height - h - 60);
+
+    // 60 = gap from the bottom. Increase it to move the panel up.
+    const y = Math.max(0, p.height - h - 90);
     chartDiv.position(x, y);
   }
 
