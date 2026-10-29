@@ -24,11 +24,10 @@ import {
    -------------------------------------------------------------------------
    • Fish are clickable. Clicking a fish dims the scene, spotlights the fish
      with an additive glow, and shows:
-        - a callout (species + fun fact) hovering ABOVE the clicked fish
-        - a bottom-centre chart panel with the population history. The
-          panel sits on a black rectangle whose edges radiate black outward
-          and fade to transparent (via layered box-shadow), and stretches to
-          the full canvas width.
+        - a callout (species + fun fact + why care) 
+        - a chart panel with the population history.
+     Both panels share the same width and are stacked vertically to the
+     left or right of the clicked fish, overlaying the toolbar buttons.
    • Dragging across the chart highlights the nearest data point and sets the
      spotlighted fish's opacity to (count - min) / (max - min), so lowering
      the scrubber fades the fish out — a visual read on how the population
@@ -58,6 +57,11 @@ interface AbsDivOptions {
   zIndex?: string;
   boxShadow?: string;
 }
+
+/* Panel layout constants — both callout and chart use the same width. */
+const PANEL_WIDTH = 360;
+const PANEL_GAP = 12;
+const PANEL_MARGIN = 16;
 
 export function sketch(p: p5): void {
   const common = createCommon(p);
@@ -256,11 +260,11 @@ export function sketch(p: p5): void {
     // --- Overlay UI -------------------------------------------------------
     const parentNode = (p as any)._userNode as HTMLElement | undefined;
 
-    // Callout: solid, pinned above the fish.
+    // Callout: solid, pinned to the side of the fish.
     calloutDiv = createGlassDiv(p, {
       parent: parentNode,
       id: "fish-callout",
-      width: "360px",
+      width: `${PANEL_WIDTH}px`,
       overrides: {
         background: "rgba(10, 20, 35, 0.5)",
         boxShadow:
@@ -271,13 +275,13 @@ export function sketch(p: p5): void {
       },
     });
 
-    // Chart panel: outer shell is transparent with a radial glow; the inner
-    // black rectangle is created fresh per-fish (see showCallout) and is
-    // what actually carries the radiating box-shadow.
+    // Chart panel: outer shell is transparent; the inner card carries the
+    // glass UI. Width is managed by positionPanels() so it matches the
+    // callout exactly.
     chartDiv = createAbsoluteDiv({
       parent: parentNode,
       id: "fish-chart",
-      padding: "0px", // theres alr padding in the outside container
+      padding: "0px",
       background: "transparent",
       border: "none",
       borderRadius: "0",
@@ -297,22 +301,22 @@ export function sketch(p: p5): void {
         [number, number, number],
       ]
     > = [
-      [
-        [255, 146, 74],
-        [255, 96, 46],
-        [255, 196, 120],
-      ],
-      [
-        [104, 196, 255],
-        [46, 124, 224],
-        [168, 232, 255],
-      ],
-      [
-        [255, 214, 92],
-        [242, 172, 44],
-        [255, 240, 168],
-      ],
-    ];
+        [
+          [255, 146, 74],
+          [255, 96, 46],
+          [255, 196, 120],
+        ],
+        [
+          [104, 196, 255],
+          [46, 124, 224],
+          [168, 232, 255],
+        ],
+        [
+          [255, 214, 92],
+          [242, 172, 44],
+          [255, 240, 168],
+        ],
+      ];
     fallbackFishImgs = palettes.map((pl) =>
       common.makeFishSprite(pl[0], pl[1], pl[2]),
     );
@@ -351,6 +355,7 @@ export function sketch(p: p5): void {
     viewBtn.style("letter-spacing", "1.5px");
     viewBtn.style("cursor", "pointer");
     viewBtn.style("outline", "none");
+    viewBtn.style("z-index", "10");
     viewBtn.mousePressed(toggleView);
 
     // --- Interaction-mode toggle -----------------------------------------
@@ -367,6 +372,7 @@ export function sketch(p: p5): void {
     modeBtn.style("letter-spacing", "1.5px");
     modeBtn.style("cursor", "pointer");
     modeBtn.style("outline", "none");
+    modeBtn.style("z-index", "10");
     modeBtn.mousePressed(toggleSelectMode);
 
     requestAnimationFrame(() => {
@@ -555,42 +561,20 @@ export function sketch(p: p5): void {
       common.drawSpotlightGlow(selectedFish, camState, frontView, glowImg);
 
       // 4. Spotlighted fish, opacity driven by the chart scrubber.
+      //    t = 0 freezes fin flapping too, so the fish looks fully static.
       common.drawFish(
         selectedFish,
         camState,
         frontView,
-        t,
+        0,
         true,
         selectedOpacity,
       );
       p.noTint();
 
-      // 5. Keep the callout hovering above the fish.
-      updateCalloutPosition();
+      // 5. Keep the stacked callout + chart panels anchored beside the fish.
+      positionPanels();
     }
-
-    // TODO: commment out after debug
-    // const f0 = fishes[0];
-    // if (f0) {
-    //   const s = common.projectToScreen(
-    //     camState,
-    //     frontView,
-    //     frontZoom,
-    //     f0.pos.x,
-    //     f0.pos.y,
-    //     f0.pos.z,
-    //   );
-    //   let dot = document.getElementById("dbg-dot");
-    //   if (!dot) {
-    //     dot = document.createElement("div");
-    //     dot.id = "dbg-dot";
-    //     dot.style.cssText =
-    //       "position:absolute;width:10px;height:10px;margin:-5px;border-radius:50%;background:red;pointer-events:none;z-index:2000";
-    //     ((p as any)._userNode as HTMLElement).appendChild(dot);
-    //   }
-    //   dot.style.left = s.x + "px";
-    //   dot.style.top = s.y + "px";
-    // }
   };
 
   /* ------------------------------ FISH MOTION ---------------------------- */
@@ -625,12 +609,6 @@ export function sketch(p: p5): void {
   }
 
   /* ---------------------- HIT-TEST HELPERS ------------------------------- */
-  /**
-   * Projected half-extents of the fish's actual sprite rectangle, in screen
-   * pixels. Uses the same yaw/pitch math as drawFish so the returned box
-   * matches what's actually painted (roughly f.size wide × f.size*0.5 tall,
-   * not a fat circle).
-   */
   function projectedScreenExtents(f: EndangeredFish): {
     rx: number;
     ry: number;
@@ -647,10 +625,9 @@ export function sketch(p: p5): void {
       return { rx: 0, ry: 0 };
     }
 
-    // Matches drawFish: plane is 2×1, scaled by (size*0.5, size*0.5*sy).
     const halfW = f.size * 0.5;
     const halfH = f.size * 0.25;
-    const sy = 1.05; // max fin-flap
+    const sy = 1.05;
 
     let vx: number, vy: number, vz: number;
     if (frontView) {
@@ -669,7 +646,6 @@ export function sketch(p: p5): void {
     const cp = Math.cos(pitch),
       spp = Math.sin(pitch);
 
-    // Local (lx, ly, 0) → world offset (rotateY then rotateX, matching p5).
     const localToWorld = (lx: number, ly: number): [number, number, number] => {
       const x1 = lx * cy;
       const y1 = ly;
@@ -706,7 +682,6 @@ export function sketch(p: p5): void {
       if (s.y > maxY) maxY = s.y;
     }
 
-    // Floor for far / small fish so they don't become impossible to click.
     return {
       rx: Math.max((maxX - minX) / 2, 14),
       ry: Math.max((maxY - minY) / 2, 12),
@@ -732,7 +707,7 @@ export function sketch(p: p5): void {
 
   /* ------------------------------ INPUT ----------------------------------- */
   p.mousePressed = () => {
-    if (pressIsOnPanel()) return; // clicks on callout / chart never select or close
+    if (pressIsOnPanel()) return;
 
     if (!isInsideCanvas(p)) {
       if (selectedFish) deselect();
@@ -746,7 +721,7 @@ export function sketch(p: p5): void {
         screenY: number;
         rx: number;
         ry: number;
-        depthSq: number; // squared distance from camera — smaller = nearer = on top
+        depthSq: number;
       };
 
       const infos: Info[] = [];
@@ -769,7 +744,6 @@ export function sketch(p: p5): void {
         infos.push({ fish: f, screenX: sp.x, screenY: sp.y, rx, ry, depthSq });
       }
 
-      // Pass 1: click inside the fish's projected rectangle (with a small pad).
       const PAD = 8;
       const inside = infos
         .filter(
@@ -778,7 +752,6 @@ export function sketch(p: p5): void {
             Math.abs(p.mouseY - i.screenY) <= i.ry + PAD,
         )
         .sort((a, b) => {
-          // Front fish wins on overlap; tie-break by how centred the click is.
           if (a.depthSq !== b.depthSq) return a.depthSq - b.depthSq;
           const da =
             Math.abs(p.mouseX - a.screenX) / a.rx +
@@ -791,7 +764,6 @@ export function sketch(p: p5): void {
 
       let clickedFish: EndangeredFish | null = inside[0]?.fish ?? null;
 
-      // Pass 2: nearest fish within a tight pixel gap (was 45px, now 18px).
       if (!clickedFish) {
         const FALLBACK_PX = 18;
         const nearby = infos
@@ -826,7 +798,7 @@ export function sketch(p: p5): void {
     destroyChart();
     if (!selectedFish || selectedFish.id !== f.id) return;
 
-    /* ---------- 1. Callout: name + fun fact (above the fish) ---------- */
+    /* ---------- 1. Callout: name + fun fact + why care ---------- */
     calloutDiv.html(`
       <h2 style="margin:0 0 8px 0;color:#7fd4ff;font-size:17px;text-shadow: 0 0 10px rgba(127, 212, 255, 0.5);">
         ${f.species}
@@ -853,9 +825,8 @@ export function sketch(p: p5): void {
       >Click outside to close</div>
     `);
     calloutDiv.show();
-    updateCalloutPosition();
 
-    /* ---------- 2. Chart panel: outer shell + inner black card -------- */
+    /* ---------- 2. Chart panel: outer shell + inner glass card -------- */
     const chartCanvasId = `fish-chart-${f.id.replace(/[^a-z0-9]/gi, "")}`;
 
     chartDiv.html(`
@@ -875,8 +846,12 @@ export function sketch(p: p5): void {
       </div>
     `);
     chartDiv.show();
-    positionChartDiv();
     wireCloseButton();
+
+    // Position once now (with rough heights), and again after layout so the
+    // measured heights are correct once the chart canvas has been sized.
+    positionPanels();
+    requestAnimationFrame(() => positionPanels());
 
     /* ---------- 3. Chart.js setup ------------------------------------- */
     const canvas = document.getElementById(
@@ -901,7 +876,6 @@ export function sketch(p: p5): void {
     const counts = hist.map((d) => d.count);
     const last = hist.length - 1;
 
-    // Ratio helpers used by both the highlight styles and the fish opacity.
     const minC = Math.min(...counts);
     const maxC = Math.max(...counts);
     const range = maxC - minC || 1;
@@ -909,13 +883,12 @@ export function sketch(p: p5): void {
     const ratioToOpacity = (r: number) =>
       0.15 + 0.85 * Math.max(0, Math.min(1, r));
 
-    // Seed the fish opacity from the initially-highlighted (last) point.
     selectedOpacity = ratioToOpacity(ratioFor(last));
 
     const pointStyles = (idx: number) => ({
       pointRadius: counts.map((_, i) => (i === idx ? 6 : 2.5)),
       pointBackgroundColor: counts.map((_, i) =>
-        i === idx ? "##8aa" : "#4a7a99",
+        i === idx ? "#8aabb8" : "#4a7a99",
       ),
       pointBorderColor: counts.map((_, i) =>
         i === idx ? "#ffffff" : "rgba(0,0,0,0)",
@@ -956,7 +929,6 @@ export function sketch(p: p5): void {
 
         ctx.save();
 
-        /* 1. dashed reference line at the FIRST point's value */
         ctx.beginPath();
         ctx.setLineDash([6, 4]);
         ctx.lineWidth = 1;
@@ -965,7 +937,6 @@ export function sketch(p: p5): void {
         ctx.lineTo(chartArea.right, yFirst);
         ctx.stroke();
 
-        /* 2. solid line at the CURRENT (highlighted) point's value */
         ctx.beginPath();
         ctx.setLineDash([]);
         ctx.lineWidth = 1.4;
@@ -974,8 +945,6 @@ export function sketch(p: p5): void {
         ctx.lineTo(chartArea.right, yCur);
         ctx.stroke();
 
-        /* 3. badge — centered horizontally on the highlighted point,
-              floating just above that point's marker */
         let text: string;
         if (base === 0) {
           text = diff === 0 ? "▲ 0.0%" : `${up ? "▲" : "▼"} —`;
@@ -992,7 +961,6 @@ export function sketch(p: p5): void {
         const boxW = Math.ceil(textW + padX * 2);
         const boxH = fontSize + padY * 2;
 
-        // X: centred on the highlighted data point.
         let xCur: number;
         try {
           xCur = scales.x.getPixelForValue(idx);
@@ -1001,18 +969,13 @@ export function sketch(p: p5): void {
           xCur = sc.left + ((idx + 0.5) / labels.length) * sc.width;
         }
 
-        // Clamp so the badge can't slide outside the plot at the edges.
         const boxX = Math.max(
           chartArea.left + 2,
           Math.min(chartArea.right - boxW - 2, xCur - boxW / 2),
         );
 
-        // gap between label and point
         const markerGap = 14;
 
-        // Clamp to the canvas (so the badge may float into the reserved
-        // top padding) instead of chartArea.top, which used to shove the
-        // badge downwards whenever the point was near the top.
         const boxY = Math.max(
           2,
           Math.min(chart.height - boxH - 2, yCur - boxH - markerGap),
@@ -1076,9 +1039,9 @@ export function sketch(p: p5): void {
       },
       options: {
         responsive: true,
-        maintainAspectRatio: false, // required: the wrapper div is a fixed 160px
+        maintainAspectRatio: false,
         animation: false,
-        events: [], // we handle input ourselves; avoids hover/tooltip conflicts
+        events: [],
         font: { family: "'Poppins', sans-serif" },
         layout: {
           padding: { top: 34 },
@@ -1099,6 +1062,9 @@ export function sketch(p: p5): void {
       },
     });
 
+    // Re-measure after Chart.js has laid out its canvas.
+    requestAnimationFrame(() => positionPanels());
+
     /* ------------------ draggable chart (highlight scrubber) ----------- */
     const applyHighlight = (idx: number, doLog: boolean) => {
       if (!currentChart) return;
@@ -1111,21 +1077,20 @@ export function sketch(p: p5): void {
       ds.pointBorderWidth = s.pointBorderWidth;
       currentChart.update("none");
 
-      // Feed the scrubber back into the fish's opacity.
       selectedOpacity = ratioToOpacity(ratioFor(idx));
 
       if (doLog) {
         // eslint-disable-next-line no-console
         console.log(
           `[aquarium] ${f.species} — ${labels[idx]}: ${counts[idx]} ` +
-            `(opacity ${selectedOpacity.toFixed(2)})`,
+          `(opacity ${selectedOpacity.toFixed(2)})`,
         );
       }
     };
-
     const nearestIndex = (ev: MouseEvent | TouchEvent): number => {
       if (!currentChart) return -1;
       const rect = canvas.getBoundingClientRect();
+
       let clientX: number;
       if ("touches" in ev) {
         if (ev.touches.length === 0) return highlighted;
@@ -1133,20 +1098,21 @@ export function sketch(p: p5): void {
       } else {
         clientX = ev.clientX;
       }
-      const scaleX = (currentChart.width || canvas.width) / rect.width || 1;
-      const x = (clientX - rect.left) * scaleX;
+
+      // Pointer position in CSS pixels, relative to the canvas element.
+      // Chart.js point meta coordinates are also in CSS pixels relative
+      // to the canvas, so no DPR scaling is needed here.
+      const x = clientX - rect.left;
+
+      const meta = currentChart.getDatasetMeta(0);
+      if (!meta || !meta.data || meta.data.length === 0) return highlighted;
 
       let best = highlighted;
       let bestD = Infinity;
-      for (let i = 0; i < labels.length; i++) {
-        let px: number;
-        try {
-          px = currentChart.scales.x.getPixelForTick(i);
-        } catch {
-          const sc = currentChart.scales.x;
-          px = sc.left + ((i + 0.5) / labels.length) * sc.width;
-        }
-        const d = Math.abs(px - x);
+      for (let i = 0; i < meta.data.length; i++) {
+        const ptX = meta.data[i].x;
+        if (!isFinite(ptX)) continue;
+        const d = Math.abs(ptX - x);
         if (d < bestD) {
           bestD = d;
           best = i;
@@ -1154,7 +1120,7 @@ export function sketch(p: p5): void {
       }
       return best;
     };
-
+    
     const onDown = (ev: Event) => {
       ev.stopPropagation();
       ev.preventDefault();
@@ -1202,7 +1168,6 @@ export function sketch(p: p5): void {
   }
 
   function wireCloseButton(): void {
-    // 1. Chart close button
     const chartCloser = chartDiv.elt.querySelector(
       "[data-close-btn]",
     ) as HTMLElement | null;
@@ -1213,7 +1178,6 @@ export function sketch(p: p5): void {
       });
     }
 
-    // 2. Callout close button
     const calloutCloser = calloutDiv.elt.querySelector(
       "[data-close-btn]",
     ) as HTMLElement | null;
@@ -1240,13 +1204,34 @@ export function sketch(p: p5): void {
     </div>
   </div>
 `);
-    positionChartDiv();
     wireCloseButton();
+    positionPanels();
+    requestAnimationFrame(() => positionPanels());
   }
 
-  /** Pin the callout above the fish (never below). */
-  function updateCalloutPosition(): void {
-    if (!selectedFish) return;
+  /**
+   * Stack the callout and chart as a single column (same width) to the
+   * left or right of the clicked fish — whichever side has more room —
+   * vertically centred on the fish, clamped to stay on screen.
+   *
+   * Called from p.draw() so the panels track any camera movement / resize.
+   * Both panels use z-index 1000, so they overlap the view/mode buttons
+   * (which sit at z-index 10).
+   */
+  function positionPanels(): void {
+    if (!selectedFish || !calloutDiv || !chartDiv) return;
+    const calloutEl = calloutDiv.elt as HTMLElement;
+    const chartEl = chartDiv.elt as HTMLElement;
+    if (calloutEl.style.display === "none") return;
+
+    // Force both panels to the same width.
+    calloutDiv.style("width", `${PANEL_WIDTH}px`);
+    chartDiv.style("width", `${PANEL_WIDTH}px`);
+
+    const calloutH = calloutEl.offsetHeight || 140;
+    const chartH = chartEl.offsetHeight || 320;
+    const totalH = calloutH + PANEL_GAP + chartH;
+
     const sp = common.projectToScreen(
       camState,
       frontView,
@@ -1255,38 +1240,27 @@ export function sketch(p: p5): void {
       selectedFish.pos.y,
       selectedFish.pos.z,
     );
-    const rect = calloutDiv.elt.getBoundingClientRect();
-    const margin = 16;
+    if (!sp || !isFinite(sp.x) || !isFinite(sp.y)) return;
 
-    let cx = sp.x - rect.width / 2;
-    let cy = sp.y - selectedFish.size * 0.5 - rect.height - 24;
+    // Prefer the side with more available room.
+    const roomRight = p.width - sp.x;
+    const roomLeft = sp.x;
+    const placeRight = roomRight >= roomLeft;
 
-    if (cx < margin) cx = margin;
-    if (cx + rect.width > p.width - margin) cx = p.width - rect.width - margin;
-    if (cy < margin) cy = margin;
+    let x = placeRight
+      ? sp.x + selectedFish.size * 0.5 + 24
+      : sp.x - selectedFish.size * 0.5 - 24 - PANEL_WIDTH;
 
-    calloutDiv.position(cx, cy);
-  }
+    x = Math.max(
+      PANEL_MARGIN,
+      Math.min(p.width - PANEL_WIDTH - PANEL_MARGIN, x),
+    );
 
-  /**
-   * Bottom-centre, full-width chart panel. Width is `min(p.width - 80, 1400)`
-   * so the panel stretches to the screen but never gets absurdly wide on
-   * very large monitors. Sits 60px above the canvas floor.
-   */
-  function positionChartDiv(): void {
-    if (!chartDiv) return;
-    const w = Math.min(p.width - 80, 1400);
-    chartDiv.style("width", `${w}px`);
+    let y = sp.y - totalH / 2;
+    y = Math.max(PANEL_MARGIN, Math.min(p.height - totalH - PANEL_MARGIN, y));
 
-    // Force layout so offsetHeight is accurate after the width change.
-    const el = chartDiv.elt as HTMLElement;
-    const h = el.offsetHeight || 260;
-
-    const x = Math.max(0, (p.width - w) / 2);
-
-    // 60 = gap from the bottom. Increase it to move the panel up.
-    const y = Math.max(0, p.height - h - 90);
-    chartDiv.position(x, y);
+    calloutDiv.position(x, y);
+    chartDiv.position(x, y + calloutH + PANEL_GAP);
   }
 
   /* --------------------------- MOUSE / TOUCH ---------------------------- */
@@ -1338,9 +1312,8 @@ export function sketch(p: p5): void {
     const { w, h } = containerSize();
     p.resizeCanvas(w, h);
     p.perspective(p.PI / 3, w / h, 10, 7000);
-    if (chartDiv && chartDiv.elt.style.display !== "none") positionChartDiv();
     if (calloutDiv && calloutDiv.elt.style.display !== "none") {
-      updateCalloutPosition();
+      positionPanels();
     }
   }
 

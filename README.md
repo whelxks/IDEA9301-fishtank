@@ -120,7 +120,7 @@ The dashboard is designed so a decision-maker can read the funding case in a few
 ### Data model (as used by the sketches)
  
 - **Endangered fish rows**: `id`, `species`, `fun_fact`, `why_care`, `image_url`, `population_history` (array of `{ month, count }`).
-- **Community fish rows**: `id`, `image_url`, `outline` (the species name, used to group fish and calculate deficits).
+- **Community fish rows**: `id`, `image_url`, `species` (the species name, used to group fish and calculate deficits).
 ---
  
 ## Controls
