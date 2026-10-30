@@ -23,13 +23,11 @@ body {
     color-scheme: dark;
   }
 
-  cursor: none; /* Hides the default arrow globally */
+  /* cursor: none; */
 
-  /* Optional: Bring the cursor back for specific UI elements 
-   if you don't want the sparkle over text inputs, etc. */
-  input,
+  /* input,
   textarea,
   select {
     cursor: auto;
-  }
+  }  */
 }

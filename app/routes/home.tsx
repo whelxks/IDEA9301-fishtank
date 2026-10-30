@@ -101,7 +101,7 @@ export default function Home() {
             <EndangeredAquarium />
           </div>
           <PaneLabel
-            text="fishes from the past"
+            text="endangered fishes"
             left="0%"
             width={`${pct}%`}
             color="#ffffff"
@@ -127,7 +127,7 @@ export default function Home() {
           </div>
 
           <PaneLabel
-            text="fishes you want to see in 5 years"
+            text="community fishes"
             left={`${pct}%`}
             width={`${100 - pct}%`}
             color="#7fd4ff"

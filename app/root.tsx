@@ -33,11 +33,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Links />
 
         {/* Chart.js loaded once globally — used by the endangered aquarium callout */}
-        <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer></script>
+        <script
+          src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
+          defer
+        ></script>
       </head>
       <body>
         {children}
-          <SparkleCursor />
+        {/* <SparkleCursor /> */}
         <ScrollRestoration />
         <Scripts />
       </body>

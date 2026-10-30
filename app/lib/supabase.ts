@@ -10,6 +10,7 @@ export type FishRow = {
   id: string;
   image_url: string;
   outline: string | null;
+  species: string;
   created_at: string;
 };
 
@@ -79,11 +80,12 @@ export function subscribeToNewFish(onInsert: (row: FishRow) => void) {
 // insert a new fish row; returns the inserted row, or null on failure
 export async function addNewFish(
   imageUrl: string,
-  outline: string | null = null
+  outline: string | null = null,
+  species: string
 ): Promise<FishRow | null> {
   const { data, error } = await supabase
     .from("fish")
-    .insert({ image_url: imageUrl, outline })
+    .insert({ image_url: imageUrl, outline, species })
     .select()
     .single();
 

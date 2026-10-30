@@ -5,84 +5,56 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
+import { Link, useNavigate, useParams } from "react-router";
 import { supabase, addNewFish } from "../../lib/supabase";
+import {
+  FISH_OUTLINES,
+  findLabelBySlug,
+  findOutlineIdBySlug,
+} from "~/constants/fish-outlines";
+import { GLASS_UI_CSS, HOLO_GLASS_OVERRIDES } from "~/components/glass-ui";
+import StudioPage, { studioStyles } from "~/components/steppers";
+import { saveFinishedFish } from "~/functions/finished-fish";
 
 const STORAGE_BUCKET = "fish-bucket";
+const COMPLETED_PATH = "/color/completed";
+
+const TEAL = "#53D7C7";
 
 /* --------------------------- CANVAS RESOLUTION -------------------------- */
-const CANVAS_W = 320;
-const CANVAS_H = 360;
+// The canvas takes the aspect ratio of the selected outline. It is fitted
+// inside DISPLAY_MAX_W x DISPLAY_MAX_H (CSS px); the backing store is RES
+// times larger so strokes stay crisp.
+const DISPLAY_MAX_W = 300;
+const DISPLAY_MAX_H = 340;
+const RES = 1.25;
+
+function getCanvasDims(aspect: number) {
+  let dispW = DISPLAY_MAX_W;
+  let dispH = dispW / aspect;
+  if (dispH > DISPLAY_MAX_H) {
+    dispH = DISPLAY_MAX_H;
+    dispW = dispH * aspect;
+  }
+  dispW = Math.round(dispW);
+  dispH = Math.round(dispH);
+  return {
+    dispW,
+    dispH,
+    w: Math.round(dispW * RES),
+    h: Math.round(dispH * RES),
+  };
+}
+
+const DEFAULT_OUTLINE_ID = Object.keys(FISH_OUTLINES)[0];
+const DEFAULT_LABEL = FISH_OUTLINES[DEFAULT_OUTLINE_ID].label;
+
+// Gap between the drawing and the tools, and between the tools and the finish button.
+const SECTION_GAP = 58;
 
 const SEND_ANIM_MS = 1800;
 const MAX_UNDO = 40;
 const OUTLINE_COLOR = "#1b2e2c";
-
-/* ------------------------------ FISH OUTLINES --------------------------- */
-type OutlineDef = {
-  label: string;
-  eye: { x: number; y: number };
-  draw: (ctx: CanvasRenderingContext2D, w: number, h: number) => void;
-};
-
-// TODO: run imageToPath once endangered fish outlines are available
-const FISH_OUTLINES: Record<string, OutlineDef> = {
-  classic: {
-    label: "Classic",
-    eye: { x: 0.3, y: 0.44 },
-    draw(ctx, w, h) {
-      ctx.beginPath();
-      ctx.ellipse(w * 0.42, h * 0.5, w * 0.28, h * 0.22, 0, 0, Math.PI * 2);
-      ctx.moveTo(w * 0.68, h * 0.5);
-      ctx.lineTo(w * 0.92, h * 0.26);
-      ctx.lineTo(w * 0.92, h * 0.74);
-      ctx.closePath();
-      ctx.moveTo(w * 0.4, h * 0.3);
-      ctx.lineTo(w * 0.5, h * 0.08);
-      ctx.lineTo(w * 0.56, h * 0.32);
-      ctx.closePath();
-      ctx.moveTo(w * 0.4, h * 0.7);
-      ctx.lineTo(w * 0.48, h * 0.92);
-      ctx.lineTo(w * 0.55, h * 0.68);
-      ctx.closePath();
-    },
-  },
-  round: {
-    label: "Round",
-    eye: { x: 0.34, y: 0.42 },
-    draw(ctx, w, h) {
-      ctx.beginPath();
-      ctx.ellipse(w * 0.48, h * 0.5, w * 0.3, h * 0.28, 0, 0, Math.PI * 2);
-      ctx.moveTo(w * 0.76, h * 0.5);
-      ctx.lineTo(w * 0.92, h * 0.38);
-      ctx.lineTo(w * 0.92, h * 0.62);
-      ctx.closePath();
-      ctx.moveTo(w * 0.44, h * 0.24);
-      ctx.lineTo(w * 0.5, h * 0.08);
-      ctx.lineTo(w * 0.57, h * 0.26);
-      ctx.closePath();
-    },
-  },
-  angel: {
-    label: "Angel",
-    eye: { x: 0.32, y: 0.4 },
-    draw(ctx, w, h) {
-      ctx.beginPath();
-      ctx.ellipse(w * 0.46, h * 0.52, w * 0.2, h * 0.32, 0, 0, Math.PI * 2);
-      ctx.moveTo(w * 0.4, h * 0.24);
-      ctx.lineTo(w * 0.5, h * 0.02);
-      ctx.lineTo(w * 0.55, h * 0.28);
-      ctx.closePath();
-      ctx.moveTo(w * 0.4, h * 0.78);
-      ctx.lineTo(w * 0.48, h * 0.98);
-      ctx.lineTo(w * 0.55, h * 0.74);
-      ctx.closePath();
-      ctx.moveTo(w * 0.62, h * 0.52);
-      ctx.lineTo(w * 0.84, h * 0.34);
-      ctx.lineTo(w * 0.84, h * 0.7);
-      ctx.closePath();
-    },
-  },
-};
 
 /* --------------------------------- STAMPS -------------------------------- */
 function drawStar(
@@ -186,7 +158,7 @@ const COLORS = [
 ];
 
 type Tool = "brush" | "stamp" | "eraser";
-type Status = "idle" | "uploading" | "sent" | "error";
+type Status = "idle" | "uploading" | "error";
 
 type BubbleCfg = {
   id: number;
@@ -199,6 +171,8 @@ type BubbleCfg = {
 
 /* ================================ COMPONENT ============================== */
 export default function FishColoringStudio() {
+  const navigate = useNavigate();
+
   // Bottom layer: user paint. Eraser and undo act only on this canvas.
   const paintCanvasRef = useRef<HTMLCanvasElement>(null);
   // Top layer: outline stroke + eye dot. Rendered above paint, never erased.
@@ -209,16 +183,17 @@ export default function FishColoringStudio() {
     lastX: 0,
     lastY: 0,
   });
-  const swipeRef = useRef({
-    startX: 0,
-    startY: 0,
-    startTime: 0,
-    triggered: false,
-  });
   const undoStackRef = useRef<ImageData[]>([]);
 
-  const [outlineId, setOutlineId] = useState("classic");
-  const [tool, setTool] = useState<Tool | null>(null);
+  // Selected fish comes from the URL: /color/:fish (e.g. /color/seahorse).
+  // /color with no (or an unknown) slug falls back to the first outline.
+  const { fish } = useParams();
+  const outlineId = findOutlineIdBySlug(fish) ?? DEFAULT_OUTLINE_ID;
+  const species = findLabelBySlug(fish) ?? DEFAULT_LABEL;
+  const outline = FISH_OUTLINES[outlineId];
+  const dims = useMemo(() => getCanvasDims(outline.aspect), [outline.aspect]);
+
+  const [tool, setTool] = useState<Tool>("brush");
   const [stampId, setStampId] = useState("dot");
   const [color, setColor] = useState(COLORS[0]);
   const [brushSize, setBrushSize] = useState(14);
@@ -256,6 +231,7 @@ export default function FishColoringStudio() {
 
     outline.draw(overlayCtx, w, h);
     overlayCtx.lineWidth = 5;
+    overlayCtx.lineJoin = "round";
     overlayCtx.strokeStyle = OUTLINE_COLOR;
     overlayCtx.stroke();
 
@@ -269,9 +245,12 @@ export default function FishColoringStudio() {
     setCanUndo(false);
   }, []);
 
+  // Runs after React has applied the new canvas width/height, so resetCanvas
+  // always sees the dimensions that match the selected outline. It only
+  // depends on the outline: a failed upload keeps the drawing intact.
   useEffect(() => {
-    if (!isAnimating) resetCanvas(outlineId);
-  }, [outlineId, resetCanvas, isAnimating]);
+    resetCanvas(outlineId);
+  }, [outlineId, resetCanvas]);
 
   /* -------------------------------- UNDO --------------------------------- */
   // Snapshots only the paint canvas — overlay is static and never changes.
@@ -318,20 +297,12 @@ export default function FishColoringStudio() {
   }
 
   function handlePointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (isAnimating) return;
+    if (isBusy) return;
     const paint = paintCanvasRef.current;
     if (!paint) return;
     paint.setPointerCapture(e.pointerId);
     const pos = getPos(e);
     paintRef.current = { drawing: true, lastX: pos.x, lastY: pos.y };
-    swipeRef.current = {
-      startX: e.clientX,
-      startY: e.clientY,
-      startTime: Date.now(),
-      triggered: false,
-    };
-
-    if (tool === null) return;
 
     const ctx = paint.getContext("2d");
     if (!ctx) return;
@@ -354,25 +325,8 @@ export default function FishColoringStudio() {
   }
 
   function handlePointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (
-      tool === null &&
-      !swipeRef.current.triggered &&
-      !isAnimating &&
-      paintRef.current.drawing
-    ) {
-      const dt = Date.now() - swipeRef.current.startTime;
-      const dy = swipeRef.current.startY - e.clientY;
-      const dx = Math.abs(e.clientX - swipeRef.current.startX);
-      if (dt < 400 && dy > 90 && dx < 60) {
-        swipeRef.current.triggered = true;
-        paintRef.current.drawing = false;
-        sendFish();
-        return;
-      }
-    }
-
-    if (!paintRef.current.drawing || isAnimating) return;
-    if (tool === null || tool === "stamp") return;
+    if (!paintRef.current.drawing || isBusy) return;
+    if (tool === "stamp") return;
 
     const pos = getPos(e);
     const paint = paintCanvasRef.current;
@@ -403,11 +357,13 @@ export default function FishColoringStudio() {
     } catch {
       /* noop */
     }
-    // No outline-redraw needed anymore: the eraser can't reach the overlay.
   }
 
-  /* --------------------------------- SEND -------------------------------- */
-  async function sendFish() {
+  /* --------------------------------- FINISH ------------------------------ */
+  // "Finished customising": plays the swim-away animation while the fish is
+  // uploaded, then goes to /completed. On failure the drawing is kept so the
+  // person can try again.
+  async function finishCustomising() {
     if (isBusy) return;
     const paint = paintCanvasRef.current;
     const overlay = overlayCanvasRef.current;
@@ -417,14 +373,21 @@ export default function FishColoringStudio() {
     setIsAnimating(true);
     setStatus("uploading");
 
-    let outcome: "sent" | "error" = "sent";
+    let imageUrl: string | null = null;
     try {
-      // Composite the two layers into a single canvas for export.
+      // Composite the layers into a single canvas for export.
       const composite = document.createElement("canvas");
-      composite.width = CANVAS_W;
-      composite.height = CANVAS_H;
+      composite.width = paint.width;
+      composite.height = paint.height;
       const cctx = composite.getContext("2d");
       if (!cctx) throw new Error("Could not create composite context");
+
+      // Bottom layer: white fish body (inside the outline only, outside stays transparent)
+      outline.draw(cctx, composite.width, composite.height);
+      cctx.fillStyle = "#ffffff";
+      cctx.fill();
+
+      // Then the paint, then the outline stroke + eye on top
       cctx.drawImage(paint, 0, 0);
       cctx.drawImage(overlay, 0, 0);
 
@@ -446,23 +409,33 @@ export default function FishColoringStudio() {
         .from(STORAGE_BUCKET)
         .getPublicUrl(fileName);
 
-      const inserted = await addNewFish(publicUrlData.publicUrl, outlineId);
+      const inserted = await addNewFish(
+        publicUrlData.publicUrl,
+        outlineId,
+        species,
+      );
       if (!inserted) throw new Error("Insert failed");
+
+      imageUrl = publicUrlData.publicUrl;
     } catch (err) {
       console.error("Fish upload failed:", err);
-      outcome = "error";
     }
 
     const elapsed = Date.now() - started;
     const remaining = Math.max(0, SEND_ANIM_MS - elapsed);
 
     window.setTimeout(() => {
-      setStatus(outcome);
-      window.setTimeout(() => {
-        setIsAnimating(false);
-        setStatus("idle");
-        resetCanvas(outlineId);
-      }, 900);
+      if (imageUrl) {
+        const finished = { imageUrl, outlineId, label: outline.label };
+        saveFinishedFish(finished);
+        navigate(COMPLETED_PATH, { state: finished });
+      } else {
+        setStatus("error");
+        window.setTimeout(() => {
+          setIsAnimating(false);
+          setStatus("idle");
+        }, 1600);
+      }
     }, remaining);
   }
 
@@ -482,16 +455,13 @@ export default function FishColoringStudio() {
   const statusText: Record<Status, string> = {
     idle: "",
     uploading: "Sending your fish…",
-    sent: "Off it goes! 🐟",
     error: "Something went wrong — try again",
   };
 
   /* -------------------------------- RENDER ------------------------------- */
   return (
-    <div style={styles.page} onClick={() => setTool(null)}>
+    <StudioPage step={1}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Inter:wght@400;500;600&display=swap');
-
         @keyframes swimAway {
           0%   { transform: translateY(0)      rotate(0deg)  scale(1);    opacity: 1; }
           15%  { transform: translateY(8px)    rotate(-5deg) scale(1.04); opacity: 1; }
@@ -505,20 +475,61 @@ export default function FishColoringStudio() {
           100% { transform: translateY(-340px) scale(1.15); opacity: 0; }
         }
         @keyframes spin { to { transform: rotate(360deg); } }
-        @keyframes hintBob {
-          0%, 100% { transform: translateY(0);    opacity: 0.8; }
-          50%      { transform: translateY(-3px); opacity: 1; }
+
+        @keyframes pillIn {
+          from { opacity: 0; transform: translateY(-6px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+
+        .finish-btn {
+          transition: transform 0.2s ease, filter 0.2s ease,
+            box-shadow 0.2s ease, border-color 0.2s ease;
+        }
+        /* Hover only on devices that actually hover, so it doesn't stick on touch */
+        @media (hover: hover) {
+          .finish-btn:not(:disabled):hover {
+            transform: translateY(-2px) scale(1.04);
+            filter: brightness(1.3);
+            border-color: rgba(190, 245, 255, 0.95) !important;
+            box-shadow:
+              0 0 24px rgba(80, 215, 255, 0.75),
+              0 0 60px rgba(140, 110, 255, 0.5),
+              inset 0 0 26px rgba(120, 220, 255, 0.35),
+              inset 0 0 0 1px rgba(255, 255, 255, 0.3) !important;
+          }
+        }
+        .finish-btn:not(:disabled):active {
+          transform: translateY(0) scale(0.97);
         }
       `}</style>
 
-      <h1 style={styles.title}>Color your fish</h1>
+      <h1 style={studioStyles.title}>Customise your {species} </h1>
 
-      <div style={styles.outlineRow} onClick={(e) => e.stopPropagation()}>
+      {/* Only rendered while active, so it pushes everything below it down */}
+      {status !== "idle" && (
+        <div
+          role="status"
+          style={{
+            ...styles.statusPill,
+            ...(status === "error" ? styles.statusPillError : {}),
+          }}
+        >
+          {status === "uploading" && <div style={styles.spinner} />}
+          <span>{statusText[status]}</span>
+        </div>
+      )}
+      {/*NOTE: users scan QR initially to get to unique URL */}
+      {/* Each outline is its own link: /color/seahorse, /color/unifasciata, … */}
+      {/* <div style={styles.outlineGlass}>
         {Object.entries(FISH_OUTLINES).map(([id, o]) => (
-          <button
+          <Link
             key={id}
-            onClick={() => setOutlineId(id)}
-            disabled={isBusy}
+            to={`/color/${o.slug}`}
+            onClick={(e) => {
+              if (isBusy) e.preventDefault();
+            }}
+            aria-disabled={isBusy}
+            aria-current={outlineId === id ? "page" : undefined}
             style={{
               ...styles.outlineChip,
               ...(outlineId === id ? styles.outlineChipActive : {}),
@@ -526,11 +537,11 @@ export default function FishColoringStudio() {
             }}
           >
             {o.label}
-          </button>
+          </Link>
         ))}
-      </div>
+      </div> */}
 
-      <div style={styles.stage} onClick={(e) => e.stopPropagation()}>
+      <div style={styles.stage}>
         {isAnimating && (
           <div style={styles.bubbleLayer}>
             {bubbles.map((b) => (
@@ -554,10 +565,12 @@ export default function FishColoringStudio() {
         )}
 
         {/* The two canvases share a wrapper so the swim-away animation
-            moves them together as one unit. */}
+            moves them together as one unit. Its size follows the outline. */}
         <div
           style={{
             ...styles.canvasStack,
+            width: dims.dispW,
+            height: dims.dispH,
             animation: isAnimating
               ? `swimAway ${SEND_ANIM_MS}ms cubic-bezier(0.4, 0, 0.2, 1) forwards`
               : "none",
@@ -569,8 +582,8 @@ export default function FishColoringStudio() {
         >
           <canvas
             ref={paintCanvasRef}
-            width={CANVAS_W}
-            height={CANVAS_H}
+            width={dims.w}
+            height={dims.h}
             style={styles.paintCanvas}
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
@@ -578,40 +591,23 @@ export default function FishColoringStudio() {
           />
           <canvas
             ref={overlayCanvasRef}
-            width={CANVAS_W}
-            height={CANVAS_H}
+            width={dims.w}
+            height={dims.h}
             style={styles.overlayCanvas}
             aria-hidden="true"
           />
         </div>
       </div>
 
-      <div style={styles.hintRow} onClick={(e) => e.stopPropagation()}>
-        {status !== "idle" ? (
-          <div style={styles.statusRow}>
-            {status === "uploading" && <div style={styles.spinner} />}
-            <span style={styles.statusText}>{statusText[status]}</span>
-          </div>
-        ) : tool === null ? (
-          <div style={styles.hint}>
-            <span style={styles.hintArrow}>↑</span>
-            <span>Swipe up on the fish to send it swimming</span>
-          </div>
-        ) : (
-          <div style={styles.hint}>
-            <span>Tap the active tool to deselect</span>
-          </div>
-        )}
-      </div>
-
-      <div style={styles.tray} onClick={(e) => e.stopPropagation()}>
+      {/* Tools sit directly on the page background (no glass box). */}
+      <div style={styles.tray}>
         <div style={styles.toolRow}>
           <button
             style={{
               ...styles.toolBtn,
               ...(tool === "brush" ? styles.toolBtnActive : {}),
             }}
-            onClick={() => setTool(tool === "brush" ? null : "brush")}
+            onClick={() => setTool("brush")}
             disabled={isBusy}
             aria-pressed={tool === "brush"}
           >
@@ -622,7 +618,7 @@ export default function FishColoringStudio() {
               ...styles.toolBtn,
               ...(tool === "stamp" ? styles.toolBtnActive : {}),
             }}
-            onClick={() => setTool(tool === "stamp" ? null : "stamp")}
+            onClick={() => setTool("stamp")}
             disabled={isBusy}
             aria-pressed={tool === "stamp"}
           >
@@ -633,7 +629,7 @@ export default function FishColoringStudio() {
               ...styles.toolBtn,
               ...(tool === "eraser" ? styles.toolBtnActive : {}),
             }}
-            onClick={() => setTool(tool === "eraser" ? null : "eraser")}
+            onClick={() => setTool("eraser")}
             disabled={isBusy}
             aria-pressed={tool === "eraser"}
           >
@@ -645,10 +641,7 @@ export default function FishColoringStudio() {
               ...styles.undoBtn,
               ...(canUndo && !isBusy ? {} : styles.toolBtnDisabled),
             }}
-            onClick={(e) => {
-              e.stopPropagation();
-              undo();
-            }}
+            onClick={undo}
             disabled={!canUndo || isBusy}
             aria-label="Undo last stroke"
           >
@@ -673,6 +666,7 @@ export default function FishColoringStudio() {
               <button
                 key={s.id}
                 onClick={() => setStampId(s.id)}
+                aria-pressed={stampId === s.id}
                 style={{
                   ...styles.stampBtn,
                   ...(stampId === s.id ? styles.stampBtnActive : {}),
@@ -701,37 +695,66 @@ export default function FishColoringStudio() {
           </div>
         )}
       </div>
-    </div>
+
+      <button
+        className="finish-btn"
+        style={{
+          ...styles.finishBtn,
+          ...(isBusy ? { opacity: 0.6, cursor: "not-allowed" } : {}),
+        }}
+        onClick={finishCustomising}
+        disabled={isBusy}
+      >
+        I have finished!
+      </button>
+    </StudioPage>
   );
 }
 
 /* ---------------------------------- STYLES -------------------------------- */
+// Shared pill look for tool + stamp buttons (same as the status pill on the
+// NFC page): faint outlined when idle, solid teal with a glow when selected.
+const PILL: React.CSSProperties = {
+  background: "rgba(255, 255, 255, 0.03)",
+  border: "1px solid rgba(255, 255, 255, 0.3)",
+  borderRadius: 999,
+  color: "#fff",
+  fontWeight: 500,
+  cursor: "pointer",
+  transition:
+    "background 0.25s ease, color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease",
+};
+const PILL_ACTIVE: React.CSSProperties = {
+  background: TEAL,
+  borderColor: TEAL,
+  color: "#06222a",
+  fontWeight: 600,
+  boxShadow: "0 0 18px rgba(83, 215, 199, 0.45)",
+};
+
 const styles: Record<string, React.CSSProperties> = {
-  page: {
-    minHeight: "100vh",
-    background: "#0e2f36",
-    color: "#fbf3e1",
-    fontFamily: "'Inter', sans-serif",
+  // Holographic glass box around the outline chips.
+  outlineGlass: {
+    ...GLASS_UI_CSS,
+    ...HOLO_GLASS_OVERRIDES,
     display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    padding: "28px 16px 32px",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: 10,
+    padding: "14px 16px",
+    marginBottom: 18,
+    maxWidth: 380,
     boxSizing: "border-box",
   },
-  title: {
-    fontFamily: "'Baloo 2', sans-serif",
-    fontSize: 26,
-    margin: "0 0 18px",
-    fontWeight: 700,
-  },
-  outlineRow: { display: "flex", gap: 10, marginBottom: 18 },
   outlineChip: {
+    display: "inline-block",
+    textDecoration: "none",
     padding: "8px 18px",
     borderRadius: 999,
     border: "1px solid #3f5c5c",
     background: "transparent",
-    color: "#cfe3df",
-    fontFamily: "'Inter', sans-serif",
+    color: "#fff",
+    fontFamily: "'Poppins', sans-serif",
     fontSize: 14,
     cursor: "pointer",
   },
@@ -757,11 +780,10 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: "visible",
     zIndex: 0,
   },
-  // The two stacked canvases live inside this wrapper.
+  // The two stacked canvases live inside this wrapper. Width/height are set
+  // inline from the selected outline's aspect ratio.
   canvasStack: {
     position: "relative",
-    width: 260,
-    height: 292,
     borderRadius: 10,
     transformOrigin: "center center",
   },
@@ -786,113 +808,91 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 2,
   },
 
-  hintRow: {
-    height: 44,
-    display: "flex",
+  // Holographic glass pill for the "Finished customising" button.
+  finishBtn: {
+    ...GLASS_UI_CSS,
+    ...HOLO_GLASS_OVERRIDES,
+    marginTop: SECTION_GAP,
+    padding: "14px 30px",
+    borderRadius: 999,
+    color: "#fff",
+    fontFamily: "'Poppins', sans-serif",
+    fontSize: 16,
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+
+  // Upload status pill under the title, same size as the NFC page's status pill
+  statusPill: {
+    display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 14,
-    marginBottom: 6,
-  },
-  hint: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 8,
-    padding: "8px 14px",
-    borderRadius: 999,
-    background: "rgba(251, 243, 225, 0.08)",
-    color: "rgba(251, 243, 225, 0.8)",
-    fontSize: 12.5,
-    letterSpacing: 0.2,
-  },
-  hintArrow: {
-    fontSize: 14,
-    opacity: 0.85,
-    animation: "hintBob 1.6s ease-in-out infinite",
-  },
-  statusRow: {
-    display: "inline-flex",
-    alignItems: "center",
     gap: 10,
-    padding: "8px 14px",
+    boxSizing: "border-box",
+    maxWidth: "100%",
+    padding: "14px 30px",
+    marginBottom: 22,
     borderRadius: 999,
-    background: "rgba(251, 243, 225, 0.08)",
-  },
-  statusText: {
-    fontSize: 12.5,
+    background: "rgba(255, 255, 255, 0.03)",
+    border: "1px solid rgba(255, 255, 255, 0.3)",
+    color: "#fff",
+    fontSize: 16,
     fontWeight: 500,
-    color: "rgba(251, 243, 225, 0.9)",
+    textAlign: "center",
+    animation: "pillIn 0.3s ease-out",
+  },
+  statusPillError: {
+    background: "rgba(239, 111, 83, 0.12)",
+    borderColor: "rgba(239, 111, 83, 0.6)",
   },
   spinner: {
-    width: 16,
-    height: 16,
+    width: 18,
+    height: 18,
     borderRadius: "50%",
-    border: "2px solid rgba(251, 243, 225, 0.25)",
-    borderTopColor: "#fbf3e1",
+    border: "2px solid rgba(255, 255, 255, 0.25)",
+    borderTopColor: TEAL,
     animation: "spin 0.9s linear infinite",
   },
 
   tray: {
     width: "100%",
     maxWidth: 340,
-    background: "#123c42",
-    borderRadius: 16,
-    marginTop: 10,
-    padding: 14,
+    marginTop: SECTION_GAP,
     boxSizing: "border-box",
   },
   toolRow: {
     display: "flex",
     alignItems: "center",
     gap: 8,
-    marginBottom: 10,
+    marginBottom: 12,
     flexWrap: "wrap",
   },
   toolBtn: {
-    padding: "7px 14px",
-    borderRadius: 10,
-    border: "1px solid #3f5c5c",
-    background: "transparent",
-    color: "#cfe3df",
+    ...PILL,
+    padding: "8px 16px",
     fontSize: 13,
-    cursor: "pointer",
   },
-  toolBtnActive: {
-    background: "#ef6f53",
-    border: "1px solid #ef6f53",
-    color: "#1b2e2c",
-    fontWeight: 600,
-  },
+  toolBtnActive: PILL_ACTIVE,
   toolBtnDisabled: {
     opacity: 0.35,
     cursor: "not-allowed",
   },
   undoBtn: {
     marginLeft: "auto",
-    fontWeight: 500,
   },
   sliderRow: {
     display: "flex",
     alignItems: "center",
-    marginBottom: 10,
+    marginBottom: 12,
   },
   slider: { flex: 1 },
-  stampRow: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 },
+  stampRow: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 },
   stampBtn: {
-    padding: "6px 12px",
-    borderRadius: 8,
-    border: "1px solid #3f5c5c",
-    background: "transparent",
-    color: "#cfe3df",
-    fontSize: 12,
-    cursor: "pointer",
+    ...PILL,
+    padding: "7px 15px",
+    fontSize: 12.5,
   },
-  stampBtnActive: {
-    background: "#5fb49c",
-    border: "1px solid #5fb49c",
-    color: "#0e2f36",
-    fontWeight: 600,
-  },
+  stampBtnActive: PILL_ACTIVE,
   paletteRow: {
     display: "flex",
     flexWrap: "wrap",
