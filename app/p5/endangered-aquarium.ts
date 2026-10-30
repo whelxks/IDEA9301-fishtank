@@ -59,9 +59,13 @@ interface AbsDivOptions {
 }
 
 /* Panel layout constants — both callout and chart use the same width. */
-const PANEL_WIDTH = 360;
+const PANEL_WIDTH = 360; // design width; panels are scaled from this
 const PANEL_GAP = 12;
 const PANEL_MARGIN = 16;
+const COMPACT_BREAKPOINT = 700; // canvas px width below which the phone layout is used
+const MIN_PANEL_SCALE = 0.62; // never shrink text below this
+const PLOT_H_WIDE = 240; // chart plot height (design px)
+const PLOT_H_COMPACT = 150;
 
 export function sketch(p: p5): void {
   const common = createCommon(p);
@@ -96,6 +100,14 @@ export function sketch(p: p5): void {
    * mapped into [0.15, 1] so the fish never fully disappears.
    */
   let selectedOpacity = 1;
+  type PanelLayout = {
+    compact: boolean;
+    fishX: number; // where the spotlit fish should appear on screen
+    fishY: number;
+    bandH: number; // height of the free band between the two cards
+  };
+  let panelLayout: PanelLayout | null = null;
+  let spotlightT = 0; // 0 → 1 ease-in of the fish moving to the centre
 
   let calloutDiv: p5.Element;
   let chartDiv: p5.Element;
@@ -200,6 +212,8 @@ export function sketch(p: p5): void {
   function deselect(): void {
     selectedFish = null;
     selectedOpacity = 1;
+    spotlightT = 0;
+    panelLayout = null;
     if (calloutDiv) calloutDiv.hide();
     if (chartDiv) chartDiv.hide();
     destroyChart();
@@ -287,6 +301,8 @@ export function sketch(p: p5): void {
       borderRadius: "0",
       boxShadow: "none",
     });
+    calloutDiv.style("transform-origin", "top left");
+    chartDiv.style("transform-origin", "top left");
 
     // --- Textures & fallbacks ---------------------------------------------
     bubbleImg = common.makeBubbleSprite();
@@ -301,22 +317,22 @@ export function sketch(p: p5): void {
         [number, number, number],
       ]
     > = [
-        [
-          [255, 146, 74],
-          [255, 96, 46],
-          [255, 196, 120],
-        ],
-        [
-          [104, 196, 255],
-          [46, 124, 224],
-          [168, 232, 255],
-        ],
-        [
-          [255, 214, 92],
-          [242, 172, 44],
-          [255, 240, 168],
-        ],
-      ];
+      [
+        [255, 146, 74],
+        [255, 96, 46],
+        [255, 196, 120],
+      ],
+      [
+        [104, 196, 255],
+        [46, 124, 224],
+        [168, 232, 255],
+      ],
+      [
+        [255, 214, 92],
+        [242, 172, 44],
+        [255, 240, 168],
+      ],
+    ];
     fallbackFishImgs = palettes.map((pl) =>
       common.makeFishSprite(pl[0], pl[1], pl[2]),
     );
@@ -557,23 +573,52 @@ export function sketch(p: p5): void {
       const gl = p.drawingContext as WebGL2RenderingContext;
       gl.clear(gl.DEPTH_BUFFER_BIT);
 
-      // 3. Glow behind the fish.
-      common.drawSpotlightGlow(selectedFish, camState, frontView, glowImg);
+      // 3. Lay out the panels first: on phones this also decides where the
+      //    fish should be spotlit (the gap between the two cards).
+      positionPanels();
 
-      // 4. Spotlighted fish, opacity driven by the chart scrubber.
-      //    t = 0 freezes fin flapping too, so the fish looks fully static.
-      common.drawFish(
-        selectedFish,
-        camState,
-        frontView,
-        0,
-        true,
-        selectedOpacity,
-      );
+      const fish = selectedFish;
+      const origPos = fish.pos;
+      const lay = panelLayout;
+      let k = 1;
+
+      if (lay?.compact) {
+        spotlightT = Math.min(1, spotlightT + dt / 0.35);
+        const e = 1 - Math.pow(1 - spotlightT, 3); // ease-out
+        const s0 = common.projectToScreen(
+          camState,
+          frontView,
+          frontZoom,
+          origPos.x,
+          origPos.y,
+          origPos.z,
+        );
+        if (s0 && isFinite(s0.x) && isFinite(s0.y)) {
+          const tx = s0.x + (lay.fishX - s0.x) * e;
+          const ty = s0.y + (lay.fishY - s0.y) * e;
+          fish.pos = screenToWorld(origPos, tx, ty);
+
+          // Enlarge the fish so it reads well in the band.
+          const { rx } = projectedScreenExtents(fish);
+          const targetW = Math.min(p.width * 0.55, lay.bandH * 1.6);
+          const kTarget =
+            rx > 0 ? Math.max(1, Math.min(2.2, targetW / (2 * rx))) : 1;
+          k = 1 + (kTarget - 1) * e;
+        }
+      }
+
+      // 4. Glow + spotlighted fish (scaled about its own position).
+      //    t = 0 freezes fin flapping so the fish looks fully static.
+      p.push();
+      p.translate(fish.pos.x, fish.pos.y, fish.pos.z);
+      p.scale(k);
+      p.translate(-fish.pos.x, -fish.pos.y, -fish.pos.z);
+      common.drawSpotlightGlow(fish, camState, frontView, glowImg);
+      common.drawFish(fish, camState, frontView, 0, true, selectedOpacity);
+      p.pop();
       p.noTint();
 
-      // 5. Keep the stacked callout + chart panels anchored beside the fish.
-      positionPanels();
+      fish.pos = origPos; // the tank position is untouched
     }
   };
 
@@ -840,7 +885,7 @@ export function sketch(p: p5): void {
         "
       >
         <h2 style="margin:0 0 8px 0;color:#7fd4ff;font-size:17px;text-shadow: 0 0 10px rgba(127, 212, 255, 0.5);">Sightings — ${f.species}</h2>
-        <div style="position:relative;width:100%;height:240px;">
+        <div id="fish-chart-plot" style="position:relative;width:100%;height:${PLOT_H_WIDE}px;">
           <canvas id="${chartCanvasId}"></canvas>
         </div>
       </div>
@@ -858,13 +903,15 @@ export function sketch(p: p5): void {
       chartCanvasId,
     ) as HTMLCanvasElement | null;
     const ChartCtor = (window as any).Chart;
-    ChartCtor.defaults.font.family = "var(--font-sans)";
+
     if (!canvas) return;
 
     if (!ChartCtor) {
       showChartMessage("Chart unavailable");
       return;
     }
+
+    ChartCtor.defaults.font.family = "var(--font-sans)";
 
     const hist = f.populationHistory;
     if (hist.length === 0) {
@@ -1083,7 +1130,7 @@ export function sketch(p: p5): void {
         // eslint-disable-next-line no-console
         console.log(
           `[aquarium] ${f.species} — ${labels[idx]}: ${counts[idx]} ` +
-          `(opacity ${selectedOpacity.toFixed(2)})`,
+            `(opacity ${selectedOpacity.toFixed(2)})`,
         );
       }
     };
@@ -1099,10 +1146,8 @@ export function sketch(p: p5): void {
         clientX = ev.clientX;
       }
 
-      // Pointer position in CSS pixels, relative to the canvas element.
-      // Chart.js point meta coordinates are also in CSS pixels relative
-      // to the canvas, so no DPR scaling is needed here.
-      const x = clientX - rect.left;
+      const scaleX = rect.width > 0 ? canvas.offsetWidth / rect.width : 1;
+      const x = (clientX - rect.left) * scaleX;
 
       const meta = currentChart.getDatasetMeta(0);
       if (!meta || !meta.data || meta.data.length === 0) return highlighted;
@@ -1120,7 +1165,7 @@ export function sketch(p: p5): void {
       }
       return best;
     };
-    
+
     const onDown = (ev: Event) => {
       ev.stopPropagation();
       ev.preventDefault();
@@ -1224,13 +1269,65 @@ export function sketch(p: p5): void {
     const chartEl = chartDiv.elt as HTMLElement;
     if (calloutEl.style.display === "none") return;
 
-    // Force both panels to the same width.
+    const compact = p.width < COMPACT_BREAKPOINT;
+    const m = PANEL_MARGIN;
+
+    // Shorter chart on phones (set before measuring).
+    const plot = chartEl.querySelector(
+      "#fish-chart-plot",
+    ) as HTMLElement | null;
+    const plotH = compact ? PLOT_H_COMPACT : PLOT_H_WIDE;
+    if (plot && plot.style.height !== `${plotH}px`) {
+      plot.style.height = `${plotH}px`;
+    }
+
+    // Panels are laid out at the design width, then scaled with CSS.
     calloutDiv.style("width", `${PANEL_WIDTH}px`);
     chartDiv.style("width", `${PANEL_WIDTH}px`);
 
+    // offsetHeight ignores transforms, so these are the unscaled heights.
     const calloutH = calloutEl.offsetHeight || 140;
-    const chartH = chartEl.offsetHeight || 320;
-    const totalH = calloutH + PANEL_GAP + chartH;
+    const chartH = chartEl.offsetHeight || 260;
+
+    if (compact) {
+      // Phone: callout on top, chart at the bottom, fish in the gap.
+      const minBand = Math.max(110, Math.min(200, p.height * 0.2));
+      const sW = (p.width - 2 * m) / PANEL_WIDTH;
+      const sH =
+        (p.height - 2 * m - 2 * PANEL_GAP - minBand) / (calloutH + chartH);
+      const s = Math.min(1, sW, Math.max(MIN_PANEL_SCALE, sH));
+
+      const cH = calloutH * s;
+      const kH = chartH * s;
+      const x = (p.width - PANEL_WIDTH * s) / 2;
+      const chartY = p.height - m - kH;
+
+      calloutDiv.style("transform", `scale(${s})`);
+      chartDiv.style("transform", `scale(${s})`);
+      calloutDiv.position(x, m);
+      chartDiv.position(x, chartY);
+
+      const bandTop = m + cH + PANEL_GAP;
+      const bandBottom = chartY - PANEL_GAP;
+      const bandH = Math.max(60, bandBottom - bandTop);
+      panelLayout = {
+        compact: true,
+        fishX: p.width / 2,
+        fishY: bandTop + bandH / 2,
+        bandH,
+      };
+      return;
+    }
+
+    // Wide: stacked beside the fish (as before), shrunk if the screen is short.
+    const sH = (p.height - 2 * m) / (calloutH + PANEL_GAP + chartH);
+    const s = Math.max(MIN_PANEL_SCALE, Math.min(1, sH));
+    const w = PANEL_WIDTH * s;
+    const cH = calloutH * s;
+    const totalH = cH + PANEL_GAP + chartH * s;
+
+    calloutDiv.style("transform", `scale(${s})`);
+    chartDiv.style("transform", `scale(${s})`);
 
     const sp = common.projectToScreen(
       camState,
@@ -1242,25 +1339,59 @@ export function sketch(p: p5): void {
     );
     if (!sp || !isFinite(sp.x) || !isFinite(sp.y)) return;
 
-    // Prefer the side with more available room.
-    const roomRight = p.width - sp.x;
-    const roomLeft = sp.x;
-    const placeRight = roomRight >= roomLeft;
-
+    const placeRight = p.width - sp.x >= sp.x;
     let x = placeRight
       ? sp.x + selectedFish.size * 0.5 + 24
-      : sp.x - selectedFish.size * 0.5 - 24 - PANEL_WIDTH;
-
-    x = Math.max(
-      PANEL_MARGIN,
-      Math.min(p.width - PANEL_WIDTH - PANEL_MARGIN, x),
-    );
+      : sp.x - selectedFish.size * 0.5 - 24 - w;
+    x = Math.max(m, Math.min(p.width - w - m, x));
 
     let y = sp.y - totalH / 2;
-    y = Math.max(PANEL_MARGIN, Math.min(p.height - totalH - PANEL_MARGIN, y));
+    y = Math.max(m, Math.min(p.height - totalH - m, y));
 
     calloutDiv.position(x, y);
-    chartDiv.position(x, y + calloutH + PANEL_GAP);
+    chartDiv.position(x, y + cH + PANEL_GAP);
+    panelLayout = { compact: false, fishX: sp.x, fishY: sp.y, bandH: 0 };
+  }
+
+  /**
+   * Find a world position near `from` (shifted along the camera's right and
+   * world-up directions) that projects to screen point (tx, ty).
+   * Uses a few Newton steps, which is plenty with a perspective camera.
+   */
+  function screenToWorld(from: p5.Vector, tx: number, ty: number): p5.Vector {
+    const r = camState.right ? camState.right.copy() : p.createVector(1, 0, 0);
+    if (r.mag() < 1e-6) r.set(1, 0, 0);
+    r.normalize();
+
+    let x = from.x,
+      y = from.y,
+      z = from.z;
+    const STEP = 20;
+    const proj = (px: number, py: number, pz: number) =>
+      common.projectToScreen(camState, frontView, frontZoom, px, py, pz);
+
+    for (let i = 0; i < 3; i++) {
+      const s0 = proj(x, y, z);
+      const sR = proj(x + r.x * STEP, y + r.y * STEP, z + r.z * STEP);
+      const sY = proj(x, y + STEP, z);
+      if (!s0 || !sR || !sY) break;
+
+      const a11 = (sR.x - s0.x) / STEP,
+        a21 = (sR.y - s0.y) / STEP;
+      const a12 = (sY.x - s0.x) / STEP,
+        a22 = (sY.y - s0.y) / STEP;
+      const det = a11 * a22 - a12 * a21;
+      if (Math.abs(det) < 1e-6) break;
+
+      const ex = tx - s0.x,
+        ey = ty - s0.y;
+      const da = (ex * a22 - a12 * ey) / det;
+      const db = (a11 * ey - a21 * ex) / det;
+      x += r.x * da;
+      y += r.y * da + db;
+      z += r.z * da;
+    }
+    return p.createVector(x, y, z);
   }
 
   /* --------------------------- MOUSE / TOUCH ---------------------------- */

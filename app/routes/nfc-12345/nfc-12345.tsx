@@ -189,7 +189,7 @@ export default function NfcGallery() {
         </button>
         <Link to={AQUARIUM_PATH} className="finish-btn" style={styles.graphBtn}>
           <GraphIcon />
-          <span>View other endangered species</span>
+          <span>Endangered species</span>
         </Link>
       </nav>
     </StudioPage>

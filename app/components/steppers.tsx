@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { GLASS_UI_CSS } from "./glass-ui";
 
 export const THEME = {
@@ -101,6 +101,27 @@ export default function StudioPage({
   step: 1 | 2 | 3 | null;
   children: React.ReactNode;
 }) {
+  // Not putting into app.css since not all pages use StudioPage
+  // Paint the whole viewport, not just this div, and undo it on unmount
+  // so other routes (e.g. the aquarium) keep their own background.
+  useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    const prev = {
+      htmlBg: html.style.background,
+      bodyBg: body.style.background,
+      bodyMargin: body.style.margin,
+    };
+    html.style.background = THEME.bg;
+    body.style.background = THEME.bg;
+    body.style.margin = "0";
+    return () => {
+      html.style.background = prev.htmlBg;
+      body.style.background = prev.bodyBg;
+      body.style.margin = prev.bodyMargin;
+    };
+  }, []);
+
   return (
     <div className="studio-page" style={studioStyles.page}>
       <style>{`
