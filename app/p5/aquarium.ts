@@ -1005,14 +1005,35 @@ export function sketch(p: p5): void {
   let tankReady = false;
   let fishChannel: ReturnType<typeof subscribeToNewFish> | null = null;
 
+  function detectTarget(row: FishRow): { key: string; canon: string | null } {
+    const rec = row as unknown as Record<string, unknown>;
+
+    // Check `outline` first, then every other text column on the row.
+    const candidates: string[] = [];
+    if (typeof rec.outline === "string") candidates.push(rec.outline);
+    for (const [k, v] of Object.entries(rec)) {
+      if (k !== "outline" && typeof v === "string") candidates.push(v);
+    }
+
+    for (const raw of candidates) {
+      const c = canonSpecies(raw);
+      const hit = TARGET_SPECIES.find((s) => c.includes(s.canon));
+      if (hit) return { key: raw, canon: hit.canon };
+    }
+    return {
+      key: (rec.outline ?? "").toString().trim() || "unknown",
+      canon: null,
+    };
+  }
+
   function trackSpecies(row: FishRow): void {
-    const raw = (row as FishRowWithSpecies).outline;
-    const key = (raw ?? "").toString().trim() || "unknown";
+    const { key, canon } = detectTarget(row);
     speciesCounts.set(key, (speciesCounts.get(key) ?? 0) + 1);
 
-    const canon = canonSpecies(key);
-    if (targetCounts.has(canon)) {
+    if (canon) {
       targetCounts.set(canon, (targetCounts.get(canon) ?? 0) + 1);
+    } else {
+      console.warn("[aquarium] no species match for row:", row);
     }
   }
 
@@ -1066,8 +1087,7 @@ export function sketch(p: p5): void {
   function handleNewFishRow(row: FishRow): void {
     if (!row || !row.id || seenFishIds.has(row.id)) return;
     seenFishIds.add(row.id);
-    trackSpecies(row);
-    refreshStats();
+    refreshStats(); // updates the total only; species are counted when the fish is added
 
     if (!tankReady) {
       pendingFishRows.push(row);
@@ -1088,7 +1108,7 @@ export function sketch(p: p5): void {
     const url = row.image_url;
 
     if (!url) {
-      addFishToTank(makeFish(randomFallbackSprite()));
+      addFishToTank(makeFish(randomFallbackSprite()), row);
       return;
     }
 
@@ -1097,12 +1117,12 @@ export function sketch(p: p5): void {
       (img) => {
         if (run !== runId) return;
         loadedFishImgs.push(img);
-        addFishToTank(makeFish(img));
+        addFishToTank(makeFish(img), row);
       },
       () => {
         if (run !== runId) return;
         console.warn("[aquarium] new fish image failed to load:", url);
-        addFishToTank(makeFish(randomFallbackSprite()));
+        addFishToTank(makeFish(randomFallbackSprite()), row);
       },
     );
   }
@@ -1111,9 +1131,19 @@ export function sketch(p: p5): void {
     return fallbackFishImgs[fishes.length % fallbackFishImgs.length];
   }
 
-  function addFishToTank(f: Fish): void {
+  function addFishToTank(f: Fish, row?: FishRow): void {
     common.enterFromEdge(f, TANK.w, TANK.d);
     fishes.push(f);
+
+    // Count the species at the same moment the fish appears in the tank.
+    if (row) {
+      console.log(
+        "[aquarium] fish added, outline =",
+        (row as FishRowWithSpecies).outline,
+      );
+      trackSpecies(row);
+      refreshStats();
+    }
   }
 
   function teardownRealtime(): void {
