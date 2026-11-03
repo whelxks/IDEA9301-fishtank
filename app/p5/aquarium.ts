@@ -320,7 +320,7 @@ export function sketch(p: p5): void {
         position: absolute !important;
         z-index: 100 !important;
         pointer-events: auto !important;
-        max-width: 1100px;
+        max-width: 1400px; 
         margin: 0 auto;
       }
       .aq-stats-row {
@@ -396,7 +396,7 @@ export function sketch(p: p5): void {
       /* ---------- FLIP CARD (whole card rotates, bulletproof hit) -------- */
       .aq-flip-card {
         flex: 1 1 0;
-        min-width: 180px;
+        min-width: 0;  
         height: var(--aq-card-h);
         position: relative !important;
         z-index: 100 !important;
@@ -436,7 +436,7 @@ export function sketch(p: p5): void {
         justify-content: space-between;
         align-items: stretch;
         gap: 4px;
-        padding: 14px 18px 12px;
+        padding: 12px 14px 10px;
         overflow: hidden;
         pointer-events: auto !important;
       }
@@ -447,7 +447,7 @@ export function sketch(p: p5): void {
       /* row 1: small label (left) + note (right) */
       .aq-card-top {
         display: flex;
-        justify-content: space-between;
+        justify-content: flex-end;
         align-items: center;
         gap: 10px;
         width: 100%;
@@ -470,6 +470,7 @@ export function sketch(p: p5): void {
         color: #7fd4ff;
         line-height: 1.1;
         white-space: nowrap;
+        display: none;
       }
       .aq-count-label,
       .aq-contrib-note {
@@ -484,7 +485,7 @@ export function sketch(p: p5): void {
       .aq-species-highlight {
         flex: 1 1 auto;
         min-width: 0;
-        font-size: 18px;
+        font-size: 15px;
         font-weight: 600;
         color: #fff;
         line-height: 1.15;
@@ -496,7 +497,7 @@ export function sketch(p: p5): void {
       .aq-count-value,
       .aq-contrib-amount {
         flex: 0 0 auto;
-        font-size: 34px;
+        font-size: 28px;
         font-weight: 500;
         line-height: 0.9;
         color: #53D7C7;
@@ -713,27 +714,44 @@ export function sketch(p: p5): void {
     statSavedHeader = header;
     statSavedCount = count;
 
-    /* Top row: 3 holo */
-    const rowTop = document.createElement("div");
-    rowTop.className = "aq-stats-row";
-    wrap.appendChild(rowTop);
-    statsRowTop = rowTop;
+    // /* Top row: 3 holo */
+    // const rowTop = document.createElement("div");
+    // rowTop.className = "aq-stats-row";
+    // wrap.appendChild(rowTop);
+    // statsRowTop = rowTop;
 
-    /* Bottom row: 3 glass */
-    const rowBottom = document.createElement("div");
-    rowBottom.className = "aq-stats-row";
-    rowBottom.style.marginTop = "14px";
-    wrap.appendChild(rowBottom);
-    statsRowBottom = rowBottom;
+    // /* Bottom row: 3 glass */
+    // const rowBottom = document.createElement("div");
+    // rowBottom.className = "aq-stats-row";
+    // rowBottom.style.marginTop = "14px";
+    // wrap.appendChild(rowBottom);
+    // statsRowBottom = rowBottom;
 
-    for (let i = 0; i < 3; i++) {
-      const card = makeFlipCard(true);
-      rowTop.appendChild(card.outer);
-      cardRefs.push(card);
-    }
-    for (let i = 0; i < 3; i++) {
-      const card = makeFlipCard(false);
-      rowBottom.appendChild(card.outer);
+    // for (let i = 0; i < 3; i++) {
+    //   const card = makeFlipCard(true);
+    //   rowTop.appendChild(card.outer);
+    //   cardRefs.push(card);
+    // }
+    // for (let i = 0; i < 3; i++) {
+    //   const card = makeFlipCard(false);
+    //   rowBottom.appendChild(card.outer);
+    //   cardRefs.push(card);
+    // }
+
+    // refreshStats();
+
+    /* Single row: 6 cards */
+    const row = document.createElement("div");
+    row.className = "aq-stats-row";
+    row.style.display = "flex";
+    row.style.flexWrap = "nowrap";
+    wrap.appendChild(row);
+    statsRowTop = row;
+    statsRowBottom = null;
+
+    for (let i = 0; i < 6; i++) {
+      const card = makeFlipCard(i < 3); // first 3 holo, last 3 default glass (unchanged)
+      row.appendChild(card.outer);
       cardRefs.push(card);
     }
 
@@ -1238,8 +1256,8 @@ export function sketch(p: p5): void {
   function makeKelp(x: number, z: number): Kelp {
     const segs = 14;
     const h = p.random(180, 330);
-    const colA = p.color(96, 58, 12);
-    const colB = p.color(255, 196, 62);
+    const colA = p.color(96, 58, 12, 153); // add an alpha of 153 (60% of 255) to both colors:
+    const colB = p.color(255, 196, 62, 153);
     return {
       x,
       z,

@@ -381,6 +381,7 @@ export function createCommon(p: p5) {
     droop = 0.02,
   ): void {
     const n = k.segs;
+    const KELP_ALPHA = 153; // 60% of 255 (102 = 40%, 178 = 70%)
 
     /* ── Spine (unchanged) ─────────────────────────────────────────── */
     const pts: KelpPoint[] = [];
@@ -530,6 +531,12 @@ export function createCommon(p: p5) {
     }
 
     /* ── ONE draw call: all stem + leaf triangles ─────────────────── */
+    // Don't write depth while drawing the semi-transparent kelp, so the
+    // tube's front and back faces both blend instead of the back being
+    // discarded (which makes transparency look patchy/solid).
+    const gl = p.drawingContext as WebGLRenderingContext;
+    gl.depthMask(false);
+
     p.beginShape(p.TRIANGLES);
 
     // Stems
@@ -556,24 +563,23 @@ export function createCommon(p: p5) {
           sd = bri[i10];
 
         // Tri 1: a → b → c
-        p.fill(br * sa, bg * sa, bb * sa);
+        p.fill(br * sa, bg * sa, bb * sa, KELP_ALPHA);
         p.vertex(pos[a], pos[a + 1], pos[a + 2]);
-        p.fill(br * sb, bg * sb, bb * sb);
+        p.fill(br * sb, bg * sb, bb * sb, KELP_ALPHA);
         p.vertex(pos[b], pos[b + 1], pos[b + 2]);
-        p.fill(br * sc, bg * sc, bb * sc);
+        p.fill(br * sc, bg * sc, bb * sc, KELP_ALPHA);
         p.vertex(pos[c], pos[c + 1], pos[c + 2]);
 
         // Tri 2: a → c → d
-        p.fill(br * sa, bg * sa, bb * sa);
+        p.fill(br * sa, bg * sa, bb * sa, KELP_ALPHA);
         p.vertex(pos[a], pos[a + 1], pos[a + 2]);
-        p.fill(br * sc, bg * sc, bb * sc);
+        p.fill(br * sc, bg * sc, bb * sc, KELP_ALPHA);
         p.vertex(pos[c], pos[c + 1], pos[c + 2]);
-        p.fill(br * sd, bg * sd, bb * sd);
+        p.fill(br * sd, bg * sd, bb * sd, KELP_ALPHA);
         p.vertex(pos[d], pos[d + 1], pos[d + 2]);
       }
     }
 
-    // Leaves — same batch, same draw call
     // Leaves — same batch, same draw call.
     //
     // Two parameters now drive leaf geometry:
@@ -602,7 +608,7 @@ export function createCommon(p: p5) {
       const tipDrop = len * (0.55 + leafDroop);
 
       const leafCol = p.lerpColor(base, p.color(255, 232, 150), 0.3);
-      p.fill(leafCol);
+      p.fill(p.red(leafCol), p.green(leafCol), p.blue(leafCol), KELP_ALPHA);
 
       p.vertex(a.x, a.y, a.z);
       p.vertex(
@@ -614,6 +620,8 @@ export function createCommon(p: p5) {
     }
 
     p.endShape();
+
+    gl.depthMask(true); // restore depth writes for everything drawn after
   }
 
   function drawFish(
