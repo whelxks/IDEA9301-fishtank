@@ -73,7 +73,9 @@ export default function Completed() {
     <StudioPage step={2}>
       <style>{HOLO_BTN_CSS}</style>
 
-      <h1 style={styles.title}>Your fish is saved!</h1>
+      <h1 style={styles.title}>
+         
+        Look up! Your fish is saved!</h1>
 
       {fish ? (
         <div style={styles.content}>
@@ -120,7 +122,7 @@ export default function Completed() {
               style={styles.holoBtn}
               onClick={() => navigate(NFC_PATH)}
             >
-              Purchase NFC tag
+              Keep your creation
             </button>
           </section>
         </div>
